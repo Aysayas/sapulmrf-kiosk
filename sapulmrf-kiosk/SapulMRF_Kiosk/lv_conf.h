@@ -32,6 +32,9 @@
 #define LV_FONT_MONTSERRAT_28 1
 #define LV_FONT_MONTSERRAT_40 1
 #define LV_FONT_DEFAULT &lv_font_montserrat_16
+/* The kiosk's own fonts (src/fonts, Atkinson Hyperlegible Next) are compressed by lv_font_conv;
+   without this LVGL silently draws none of their glyphs. */
+#define LV_USE_FONT_COMPRESSED 1
 
 #define LV_USE_BTNMATRIX 1
 #define LV_USE_TABLE     1
