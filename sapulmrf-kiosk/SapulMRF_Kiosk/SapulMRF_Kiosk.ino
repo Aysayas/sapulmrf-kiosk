@@ -136,6 +136,7 @@ lv_obj_t *lblWeight, *lblWeightState, *btnCat[4], *btnPurok[NUM_PUROKS], *btnCon
 lv_obj_t *lblCode, *lblRcWeight, *lblRcCat, *lblRcPurok, *lblRcRecyc, *lblCountdown;
 lv_obj_t *pinDots[4], *lblPinMsg;
 lv_obj_t *tblRecent;
+lv_obj_t *statusDot, *alertBanner, *lblAlert;   // driven by SapulMRF via the PC
 lv_timer_t *receiptTimer = nullptr;
 
 const char *CATS[4] = {"Mixed household", "Recyclable", "Biodegradable", "Residual"};
@@ -249,6 +250,14 @@ void buildHome() {
   lv_label_set_long_mode(p, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(p, 420);
   lv_obj_set_pos(p, 340, 186);
+  alertBanner = box(scrHome, 420, 56, C_AMBER_BG);
+  lv_obj_set_style_radius(alertBanner, 10, 0);
+  lv_obj_set_pos(alertBanner, 340, 284);
+  lblAlert = label(alertBanner, "", &lv_font_montserrat_14, C_AMBER_TXT);
+  lv_label_set_long_mode(lblAlert, LV_LABEL_LONG_DOT);
+  lv_obj_set_size(lblAlert, 396, 40);
+  lv_obj_align(lblAlert, LV_ALIGN_LEFT_MID, 12, 0);
+  lv_obj_add_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
   lv_obj_t *start = button(scrHome, LV_SYMBOL_EYE_OPEN "  Start drop-off", 420, 76, C_GREEN, 0xFFFFFF, &lv_font_montserrat_22, onStart);
   lv_obj_set_pos(start, 340, 360);
 }
@@ -637,7 +646,20 @@ void onText(uint8_t *data, size_t len) {
   } else if (!strcmp(t, "receipt")) {
     bool saved = d["ok"] | true;            // ok:false = the PC couldn't save it
     lv_label_set_text(lblCode, saved ? (d["code"] | "OFFLINE") : "NOT SAVED");
-    lv_obj_set_style_text_color(lblCode, lv_color_hex(saved ? C_GREEN_DARK : 0xB42318), 0);
+    lv_obj_set_style_text_color(lblCode, lv_color_hex(saved ? C_GREEN_DARK : C_RED), 0);
+  } else if (!strcmp(t, "alerts")) {
+    JsonArray items = d["items"];
+    if (items.size() == 0) {
+      lv_obj_add_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      const char *title = items[0]["title"] | "";
+      if (items.size() > 1) lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s  (+%d more)", title, (int)items.size() - 1);
+      else lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s", title);
+      lv_obj_clear_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
+    }
+  } else if (!strcmp(t, "actuate")) {
+    if (d["light"].is<const char *>()) setLight(d["light"]);
+    beep(d["buzz"] | 0);
   } else if (!strcmp(t, "stats")) {
     lv_label_set_text_fmt(lblTodayKg, "%.1f kg", (float)(d["kg"] | 0.0));
     lv_label_set_text_fmt(lblTodayDrops, "collected from %d drop-offs", (int)(d["drops"] | 0));
@@ -670,6 +692,7 @@ void setPcStatus(bool up) {
     lv_obj_clear_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);   // it is hidden once video has played
   }
   if (lv_scr_act() == scrWeigh) refreshWeigh();
+  if (!up) setLight("red");                // no PC = no SapulMRF: nothing can be recorded
 }
 
 void handlePacket() {
@@ -828,6 +851,24 @@ void buildBatteryPill() {                 // on lv_layer_top(): visible on every
   lv_obj_add_flag(batPill, LV_OBJ_FLAG_HIDDEN);
 }
 
+// The MRF's status as SapulMRF decides it: green ok, amber open alert, red storage full or PC link lost.
+void setLight(const char *c) {
+  uint32_t col = !strcmp(c, "green") ? C_GREEN : !strcmp(c, "amber") ? 0xF2A33A : !strcmp(c, "red") ? C_RED : C_LINE;
+  lv_obj_set_style_bg_color(statusDot, lv_color_hex(col), 0);
+}
+
+void buildStatusDot() {                   // on lv_layer_top(), left of the battery pill
+  statusDot = box(lv_layer_top(), 16, 16, C_LINE);   // grey until the first state arrives
+  lv_obj_set_style_radius(statusDot, LV_RADIUS_CIRCLE, 0);
+  lv_obj_align(statusDot, LV_ALIGN_TOP_RIGHT, -112, 8);
+  lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_CLICKABLE);
+}
+
+void beep(int n) {
+  // shortcut: no buzzer fitted yet, so only logged; drive it here once the actuator board is wired (plan step 4)
+  if (n > 0) Serial.printf("Beep x%d\n", n);
+}
+
 void batteryInit() {
 #if BATTERY_USE_INA219
   Wire.beginTransmission(INA219_ADDR);
@@ -925,6 +966,7 @@ void setup() {
   rxBuf = (uint8_t *)ps_malloc(MAX_PACKET);
   buildHome(); buildScan(); buildWeigh(); buildReceipt(); buildPin(); buildOperator();
   buildBatteryPill();
+  buildStatusDot();
   lv_scr_load(scrHome);
   lv_timer_handler();
 

@@ -1,0 +1,5 @@
+# Ours, kept here because PlatformIO rewrites sapulmrf-kiosk/.gitignore when VS Code re-initialises the project
+sapulmrf-kiosk/pc_bridge/.venv/
+sapulmrf-kiosk/pc_bridge/outbox/
+sapulmrf-kiosk/pc_bridge/__pycache__/
+compile_commands.json
