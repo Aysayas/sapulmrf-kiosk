@@ -20,8 +20,7 @@
     Partition: Huge APP (3MB No OTA) · USB CDC On Boot: Enabled
 
   Libraries (Library Manager):
-    GFX Library for Arduino (Moon On Our Nation) 1.6.x, with ESP32 core 3.x
-      (on ESP32 core 2.0.x use GFX Library 1.4.9 instead)
+    (display: display.cpp drives the RGB panel itself through ESP-IDF, ESP32 core 3.x)
     lvgl 8.3.x            (copy lv_conf.h next to the lvgl folder; see README)
     TAMC_GT911
     JPEGDEC (bitbank2)
@@ -36,10 +35,10 @@
 #include <Wire.h>
 #include <ArduinoJson.h>
 #include <JPEGDEC.h>
-#include <Arduino_GFX_Library.h>
 #include <TAMC_GT911.h>
 #include <lvgl.h>
 #include "config.h"
+#include "display.h"
 #if USE_HX711
 #include <HX711.h>
 HX711 scale;
@@ -62,27 +61,8 @@ HX711 scale;
 #define C_RED        0xC62828
 
 // ------------------------------------------------------------ display + touch
-Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
-  TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK,
-  TFT_R0, TFT_R1, TFT_R2, TFT_R3, TFT_R4,
-  TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5,
-  TFT_B0, TFT_B1, TFT_B2, TFT_B3, TFT_B4,
-  0 /*hsync pol*/, 180 /*hfp*/, 30 /*hpw*/, 16 /*hbp*/,
-  0 /*vsync pol*/, 12 /*vfp*/, 13 /*vpw*/, 10 /*vbp*/,
-  1 /*pclk active neg*/, RGB_PCLK_HZ);
-Arduino_RGB_Display *gfx = new Arduino_RGB_Display(800, 480, rgbpanel, 0, true);
 TAMC_GT911 tp(TOUCH_SDA, TOUCH_SCL, TOUCH_INT, TOUCH_RST, 800, 480);
-
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t *lv_buf1, *lv_buf2;
-static lv_disp_drv_t disp_drv;
 static lv_indev_drv_t indev_drv;
-
-void my_flush(lv_disp_drv_t *d, const lv_area_t *a, lv_color_t *p) {
-  uint32_t w = a->x2 - a->x1 + 1, h = a->y2 - a->y1 + 1;
-  gfx->draw16bitRGBBitmap(a->x1, a->y1, (uint16_t *)&p->full, w, h);
-  lv_disp_flush_ready(d);
-}
 
 void my_touch(lv_indev_drv_t *, lv_indev_data_t *data) {
   tp.read();
@@ -613,12 +593,17 @@ int jpegDraw(JPEGDRAW *p) {                 // copy decoded block into the frame
   return 1;
 }
 
+uint32_t statFrames = 0, statDecodeMs = 0;   // video frames shown and their decode time, per stats period
+
 void onFrame(uint8_t *data, size_t len) {
   if (lv_scr_act() != scrScan) return;
   if (jpeg.openRAM(data, len, jpegDraw)) {
+    uint32_t t0 = millis();
     jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
     jpeg.decode(0, 0, 0);
     jpeg.close();
+    statDecodeMs += millis() - t0;
+    statFrames++;
     lv_obj_add_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);
     lv_obj_invalidate(imgVideo);
   }
@@ -934,30 +919,20 @@ void setup() {
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
 #endif
-  bool ok = gfx->begin();
-  Serial.printf("Display begin: %s\n", ok ? "OK" : "FAILED (check PSRAM / pins)");
+  lv_init();
+  bool ok = displayBegin();
+  Serial.printf("Display begin: %s\n", ok ? "OK (2 frame buffers, bounce buffer, VSYNC swap)" : "FAILED (check PSRAM / pins)");
 #if DISPLAY_TEST
   // Colour test: red, green, blue, white for half a second each
   const uint16_t cols[4] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
   const char *names[4] = {"red", "green", "blue", "white"};
-  for (int i = 0; i < 4; i++) { Serial.printf("Display test: %s\n", names[i]); gfx->fillScreen(cols[i]); delay(500); }
+  for (int i = 0; i < 4; i++) { Serial.printf("Display test: %s\n", names[i]); displayFill(cols[i]); delay(500); }
+  displayFill(0x0000);
 #endif
-  gfx->fillScreen(0x0000);
   Wire.begin(TOUCH_SDA, TOUCH_SCL);      // shared by GT911 touch and INA219
   tp.begin();
   tp.setRotation(ROTATION_INVERTED);   // if taps land mirrored, try ROTATION_NORMAL
 
-  lv_init();
-  const size_t bufPx = 800 * 60;
-  lv_buf1 = (lv_color_t *)heap_caps_malloc(bufPx * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-  lv_buf2 = (lv_color_t *)heap_caps_malloc(bufPx * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-  lv_disp_draw_buf_init(&draw_buf, lv_buf1, lv_buf2, bufPx);
-  lv_disp_drv_init(&disp_drv);
-  disp_drv.hor_res = 800;
-  disp_drv.ver_res = 480;
-  disp_drv.flush_cb = my_flush;
-  disp_drv.draw_buf = &draw_buf;
-  lv_disp_drv_register(&disp_drv);
   lv_indev_drv_init(&indev_drv);
   indev_drv.type = LV_INDEV_TYPE_POINTER;
   indev_drv.read_cb = my_touch;
@@ -983,11 +958,24 @@ void setup() {
   netStart();                            // Wi-Fi -> phone hotspot -> own hotspot
 }
 
+// Every 5 s on Serial: what the video and display actually do (evidence for tuning and for the thesis).
+void statsLoop() {
+  static uint32_t last = 0;
+  if (millis() - last < 5000) return;
+  float secs = (millis() - last) / 1000.0f;
+  last = millis();
+  Serial.printf("[stats] video %.1f fps, decode %lu ms avg | swap %lu ms | RAM %u KB, PSRAM %u KB free | RSSI %d dBm\n",
+                statFrames / secs, statFrames ? statDecodeMs / statFrames : 0, displayFlushMs(),
+                heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, ESP.getFreePsram() / 1024, WiFi.RSSI());
+  statFrames = statDecodeMs = 0;
+}
+
 void loop() {
   pcLoop();
   beaconLoop();
   batteryLoop();
   lv_timer_handler();
+  statsLoop();
 
 #if USE_HX711
   static uint32_t lastW = 0;
