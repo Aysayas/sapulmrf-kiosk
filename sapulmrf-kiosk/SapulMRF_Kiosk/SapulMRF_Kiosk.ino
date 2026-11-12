@@ -39,26 +39,12 @@
 #include <lvgl.h>
 #include "config.h"
 #include "display.h"
+#include "theme.h"
+#include "ui.h"
 #if USE_HX711
 #include <HX711.h>
 HX711 scale;
 #endif
-
-// ------------------------------------------------------------ colours (match the design)
-#define C_GREEN_DARK 0x1E5233
-#define C_GREEN      0x2E7D4F
-#define C_GREEN_SOFT 0xDCEFE2
-#define C_GREEN_TXT  0xC9DDD0
-#define C_GREEN_OK   0x9FE0B5
-#define C_BG         0xF4F5F2
-#define C_CARD       0xFFFFFF
-#define C_LINE       0xD5DBD3
-#define C_MUTED_BG   0xE4E8E2
-#define C_TEXT       0x1A1F1C
-#define C_TEXT2      0x4A544D
-#define C_AMBER_BG   0xFFF3E0
-#define C_AMBER_TXT  0x8A4B08
-#define C_RED        0xC62828
 
 // ------------------------------------------------------------ display + touch
 TAMC_GT911 tp(TOUCH_SDA, TOUCH_SCL, TOUCH_INT, TOUCH_RST, 800, 480);
@@ -91,93 +77,8 @@ uint8_t *rxBuf = nullptr; uint32_t rxLen = 0, rxGot = 0; char rxType = 0;
 // battery
 bool batFound = false;
 float batPct = -1, batMv = 0, batMa = 0;
-lv_obj_t *batPill, *lblBat, *lblNet, *lblIp;
 
-uint16_t *frameBuf = nullptr;            // RGB565 video frame in PSRAM
-lv_img_dsc_t frameDsc;
-
-int detRecyc = 0, detResid = 0, detBio = 0, detFps = 0;
-bool detStable = false;
-String category = "Mixed household";
-int purok = 0;                           // 0 = not chosen
-float weightKg = 0;
-bool weightManual = USE_HX711 ? false : true;
-String pinEntry = "";
-uint32_t pinAskedAt = 0;   // waiting for the PC's answer to a PIN
-String weightEntry = "";
-int receiptCountdown = 0;
-
-// screens
-lv_obj_t *scrHome, *scrScan, *scrWeigh, *scrReceipt, *scrPin, *scrOp;
-// widgets that change
-lv_obj_t *lblTodayKg, *lblTodayDrops, *lblCamStatus;
-lv_obj_t *imgVideo, *lblVideoWait, *lblFps, *lblRecyc, *lblResid, *lblBio, *lblHint, *btnNextScan;
-lv_obj_t *lblWeight, *lblWeightState, *btnCat[4], *btnPurok[NUM_PUROKS], *btnConfirm, *kpWeight;
-lv_obj_t *lblCode, *lblRcWeight, *lblRcCat, *lblRcPurok, *lblRcRecyc, *lblCountdown;
-lv_obj_t *pinDots[4], *lblPinMsg;
-lv_obj_t *tblRecent;
-lv_obj_t *statusDot, *alertBanner, *lblAlert;   // driven by SapulMRF via the PC
-lv_timer_t *receiptTimer = nullptr;
-
-const char *CATS[4] = {"Mixed household", "Recyclable", "Biodegradable", "Residual"};
-
-// ------------------------------------------------------------ small UI helpers
-static lv_obj_t *box(lv_obj_t *parent, int w, int h, uint32_t bg) {
-  lv_obj_t *o = lv_obj_create(parent);
-  lv_obj_remove_style_all(o);
-  lv_obj_set_size(o, w, h);
-  lv_obj_set_style_bg_color(o, lv_color_hex(bg), 0);
-  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-  lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
-  return o;
-}
-
-static lv_obj_t *label(lv_obj_t *parent, const char *txt, const lv_font_t *f, uint32_t color) {
-  lv_obj_t *l = lv_label_create(parent);
-  lv_label_set_text(l, txt);
-  lv_obj_set_style_text_font(l, f, 0);
-  lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-  return l;
-}
-
-static lv_obj_t *button(lv_obj_t *parent, const char *txt, int w, int h, uint32_t bg, uint32_t fg,
-                        const lv_font_t *f, lv_event_cb_t cb, void *user = nullptr) {
-  lv_obj_t *b = lv_btn_create(parent);
-  lv_obj_set_size(b, w, h);
-  lv_obj_set_style_radius(b, 12, 0);
-  lv_obj_set_style_shadow_width(b, 0, 0);
-  lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
-  lv_obj_set_style_bg_color(b, lv_color_hex(bg), LV_STATE_DISABLED);
-  lv_obj_set_style_bg_opa(b, LV_OPA_40, LV_STATE_DISABLED);
-  lv_obj_t *l = label(b, txt, f, fg);
-  lv_obj_center(l);
-  if (cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user);
-  return b;
-}
-
-static void setChoice(lv_obj_t *b, bool on) {     // outlined "chip" buttons
-  lv_obj_set_style_bg_color(b, lv_color_hex(on ? C_GREEN_SOFT : C_CARD), 0);
-  lv_obj_set_style_border_color(b, lv_color_hex(on ? C_GREEN : C_LINE), 0);
-  lv_obj_set_style_border_width(b, on ? 2 : 1, 0);
-  lv_obj_set_style_text_color(lv_obj_get_child(b, 0), lv_color_hex(on ? C_GREEN_DARK : C_TEXT), 0);
-}
-
-static lv_obj_t *countRow(lv_obj_t *parent, const char *name, uint32_t dot, lv_obj_t **valOut) {
-  lv_obj_t *r = box(parent, 236, 48, C_CARD);
-  lv_obj_set_style_radius(r, 10, 0);
-  lv_obj_set_style_border_width(r, 1, 0);
-  lv_obj_set_style_border_color(r, lv_color_hex(C_LINE), 0);
-  lv_obj_t *d = box(r, 12, 12, dot);
-  lv_obj_set_style_radius(d, 6, 0);
-  lv_obj_align(d, LV_ALIGN_LEFT_MID, 14, 0);
-  lv_obj_t *n = label(r, name, &lv_font_montserrat_16, C_TEXT);
-  lv_obj_align(n, LV_ALIGN_LEFT_MID, 36, 0);
-  *valOut = label(r, "0", &lv_font_montserrat_22, C_TEXT);
-  lv_obj_align(*valOut, LV_ALIGN_RIGHT_MID, -14, 0);
-  return r;
-}
-
-void goTo(lv_obj_t *scr);
+int detFps = 0;                          // the PC's send rate, shown on the video
 
 void sendPacket(char type, const uint8_t *data, uint32_t len) {
   if (!pc || !pc.connected()) return;
@@ -188,416 +89,11 @@ void sendPacket(char type, const uint8_t *data, uint32_t len) {
 void wsSend(JsonDocument &doc) { String s; serializeJson(doc, s); sendPacket('M', (const uint8_t *)s.c_str(), s.length()); }
 void setMode(const char *m) { JsonDocument d; d["type"] = "mode"; d["mode"] = m; wsSend(d); }
 
-// ------------------------------------------------------------ screen: Welcome
-void onStart(lv_event_t *) { goTo(scrScan); }
-void onLock(lv_event_t *) { pinEntry = ""; goTo(scrPin); }
-
-void buildHome() {
-  scrHome = box(nullptr, 800, 480, C_BG);
-  lv_obj_t *side = box(scrHome, 300, 480, C_GREEN_DARK);
-  lv_obj_t *logo = box(side, 48, 48, 0x3FA266);
-  lv_obj_set_style_radius(logo, 10, 0);
-  lv_obj_set_pos(logo, 24, 28);
-  lv_obj_center(label(logo, "MRF", &lv_font_montserrat_14, 0xFFFFFF));
-  lv_obj_set_pos(label(side, "SapulMRF", &lv_font_montserrat_20, 0xFFFFFF), 84, 30);
-  lv_obj_set_pos(label(side, "Barangay Sapul MRF", &lv_font_montserrat_12, C_GREEN_TXT), 84, 56);
-  lv_obj_set_pos(label(side, "TODAY AT THE MRF", &lv_font_montserrat_12, C_GREEN_TXT), 24, 268);
-  lblTodayKg = label(side, "-- kg", &lv_font_montserrat_40, 0xFFFFFF);
-  lv_obj_set_pos(lblTodayKg, 24, 290);
-  lblTodayDrops = label(side, "waiting for PC...", &lv_font_montserrat_14, C_GREEN_TXT);
-  lv_obj_set_pos(lblTodayDrops, 24, 340);
-  lv_obj_t *ln = box(side, 252, 1, 0x3A6B4D);
-  lv_obj_set_pos(ln, 24, 366);
-  lblNet = label(side, LV_SYMBOL_WIFI " Connecting...", &lv_font_montserrat_14, 0xFFFFFF);
-  lv_label_set_long_mode(lblNet, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(lblNet, 252);
-  lv_obj_set_pos(lblNet, 24, 378);
-  lv_obj_set_pos(label(side, "Kiosk IP", &lv_font_montserrat_14, C_GREEN_TXT), 24, 404);
-  lblIp = label(side, "-", &lv_font_montserrat_16, 0xFFFFFF);
-  lv_obj_align(lblIp, LV_ALIGN_TOP_RIGHT, -24, 402);
-  lv_obj_set_pos(label(side, "Camera PC", &lv_font_montserrat_14, C_GREEN_TXT), 24, 432);
-  lblCamStatus = label(side, LV_SYMBOL_CLOSE " Waiting", &lv_font_montserrat_14, 0xF2A33A);
-  lv_obj_align(lblCamStatus, LV_ALIGN_TOP_RIGHT, -24, 432);
-
-  lv_obj_t *lock = button(scrHome, LV_SYMBOL_SETTINGS, 48, 48, C_MUTED_BG, C_TEXT2, &lv_font_montserrat_20, onLock);
-  lv_obj_set_style_radius(lock, 24, 0);
-  lv_obj_align(lock, LV_ALIGN_TOP_RIGHT, -32, 36);   // below the battery pill
-
-  lv_obj_t *h = label(scrHome, "Magandang araw!\nDrop off your waste here.", &lv_font_montserrat_28, C_TEXT);
-  lv_obj_set_pos(h, 340, 96);
-  lv_obj_t *p = label(scrHome, "Place your bag on the scale under the camera. We'll check what's inside, weigh it, and give you a receipt code.",
-                      &lv_font_montserrat_16, C_TEXT2);
-  lv_label_set_long_mode(p, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(p, 420);
-  lv_obj_set_pos(p, 340, 186);
-  alertBanner = box(scrHome, 420, 56, C_AMBER_BG);
-  lv_obj_set_style_radius(alertBanner, 10, 0);
-  lv_obj_set_pos(alertBanner, 340, 284);
-  lblAlert = label(alertBanner, "", &lv_font_montserrat_14, C_AMBER_TXT);
-  lv_label_set_long_mode(lblAlert, LV_LABEL_LONG_DOT);
-  lv_obj_set_size(lblAlert, 396, 40);
-  lv_obj_align(lblAlert, LV_ALIGN_LEFT_MID, 12, 0);
-  lv_obj_add_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_t *start = button(scrHome, LV_SYMBOL_EYE_OPEN "  Start drop-off", 420, 76, C_GREEN, 0xFFFFFF, &lv_font_montserrat_22, onStart);
-  lv_obj_set_pos(start, 340, 360);
-}
-
-// ------------------------------------------------------------ screen: Camera scan
-void onScanNext(lv_event_t *) { goTo(scrWeigh); }
-void onCancel(lv_event_t *) { goTo(scrHome); }
-
-void buildScan() {
-  scrScan = box(nullptr, 800, 480, C_BG);
-  lv_obj_t *vid = box(scrScan, 520, 480, 0x1B201D);
-
-  frameBuf = (uint16_t *)ps_malloc(FRAME_W * FRAME_H * 2);
-  memset(frameBuf, 0, FRAME_W * FRAME_H * 2);
-  frameDsc.header.always_zero = 0;
-  frameDsc.header.w = FRAME_W;
-  frameDsc.header.h = FRAME_H;
-  frameDsc.header.cf = LV_IMG_CF_TRUE_COLOR;
-  frameDsc.data_size = FRAME_W * FRAME_H * 2;
-  frameDsc.data = (const uint8_t *)frameBuf;
-  imgVideo = lv_img_create(vid);
-  lv_img_set_src(imgVideo, &frameDsc);
-  lv_obj_align(imgVideo, LV_ALIGN_TOP_MID, 0, 40);
-
-  lblVideoWait = label(vid, "Waiting for camera from PC...", &lv_font_montserrat_14, 0x8A968E);
-  lv_obj_center(lblVideoWait);
-  lv_obj_t *live = box(vid, 120, 28, C_RED);
-  lv_obj_set_style_radius(live, 14, 0);
-  lv_obj_set_pos(live, 16, 6);
-  lblFps = label(live, "LIVE", &lv_font_montserrat_12, 0xFFFFFF);
-  lv_obj_center(lblFps);
-  lv_obj_t *tip = box(vid, 488, 40, 0x000000);
-  lv_obj_set_style_bg_opa(tip, LV_OPA_60, 0);
-  lv_obj_set_style_radius(tip, 10, 0);
-  lv_obj_align(tip, LV_ALIGN_BOTTOM_MID, 0, -14);
-  lv_obj_center(label(tip, "Spread items out so the camera can see each one", &lv_font_montserrat_14, 0xFFFFFF));
-
-  lv_obj_t *side = box(scrScan, 280, 480, C_BG);
-  lv_obj_set_pos(side, 520, 0);
-  lv_obj_set_pos(label(side, "What we see", &lv_font_montserrat_20, C_TEXT), 22, 24);
-  lv_obj_t *step = label(side, "Step 1 of 3", &lv_font_montserrat_12, C_TEXT2);
-  lv_obj_align(step, LV_ALIGN_TOP_RIGHT, -22, 30);
-  lv_obj_set_pos(countRow(side, "Recyclable", 0x2E9E57, &lblRecyc), 22, 64);
-  lv_obj_set_pos(countRow(side, "Residual", 0xD98A1E, &lblResid), 22, 120);
-  lv_obj_set_pos(countRow(side, "Biodegradable", 0x7A5A2E, &lblBio), 22, 176);
-
-  lv_obj_t *hint = box(side, 236, 92, C_GREEN_SOFT);
-  lv_obj_set_style_radius(hint, 10, 0);
-  lv_obj_set_pos(hint, 22, 236);
-  lblHint = label(hint, "Show your waste to the camera", &lv_font_montserrat_14, C_GREEN_DARK);
-  lv_label_set_long_mode(lblHint, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(lblHint, 210);
-  lv_obj_align(lblHint, LV_ALIGN_LEFT_MID, 12, 0);
-
-  lv_obj_t *c = button(side, "Cancel", 96, 60, C_MUTED_BG, C_TEXT, &lv_font_montserrat_16, onCancel);
-  lv_obj_set_pos(c, 22, 398);
-  btnNextScan = button(side, "Next: weigh", 130, 60, C_GREEN, 0xFFFFFF, &lv_font_montserrat_16, onScanNext);
-  lv_obj_set_pos(btnNextScan, 128, 398);
-  lv_obj_add_state(btnNextScan, LV_STATE_DISABLED);
-}
-
-// ------------------------------------------------------------ screen: Weigh & confirm
-void refreshWeigh() {
-  for (int i = 0; i < 4; i++) setChoice(btnCat[i], category == CATS[i]);
-  for (int i = 0; i < NUM_PUROKS; i++) setChoice(btnPurok[i], purok == i + 1);
-  if (weightManual) lv_label_set_text(lblWeight, weightEntry.length() ? weightEntry.c_str() : "0");
-  else lv_label_set_text_fmt(lblWeight, "%.1f", weightKg);
-  bool ok = pcUp && purok > 0 && weightKg > 0.05f;   // without the PC the drop-off would be lost
-  if (ok) lv_obj_clear_state(btnConfirm, LV_STATE_DISABLED); else lv_obj_add_state(btnConfirm, LV_STATE_DISABLED);
-  lv_label_set_text(lv_obj_get_child(btnConfirm, 0), pcUp ? "Confirm drop-off" : "Camera PC offline");
-}
-
-void onCat(lv_event_t *e) { category = CATS[(intptr_t)lv_event_get_user_data(e)]; refreshWeigh(); }
-void onPurok(lv_event_t *e) { purok = (intptr_t)lv_event_get_user_data(e); refreshWeigh(); }
-void onWeighBack(lv_event_t *) { goTo(scrScan); }
-
-void onWeightKey(lv_event_t *e) {
-  lv_obj_t *m = lv_event_get_target(e);
-  const char *k = lv_btnmatrix_get_btn_text(m, lv_btnmatrix_get_selected_btn(m));
-  if (!k) return;
-  if (!strcmp(k, LV_SYMBOL_BACKSPACE)) { if (weightEntry.length()) weightEntry.remove(weightEntry.length() - 1); }
-  else if (!strcmp(k, ".")) { if (weightEntry.indexOf('.') < 0) weightEntry += weightEntry.length() ? "." : "0."; }
-  else if (weightEntry.length() < 5) weightEntry += k;
-  weightKg = weightEntry.toFloat();
-  weightManual = true;
-  refreshWeigh();
-}
-
-void onConfirm(lv_event_t *) {
-  JsonDocument d;
-  d["type"] = "intake";
-  d["weight"] = weightKg;
-  d["category"] = category;
-  d["purok"] = purok;
-  d["manual"] = weightManual;
-  d["recyclables"] = detRecyc;
-  wsSend(d);
-  lv_label_set_text(lblCode, "...");
-  lv_obj_set_style_text_color(lblCode, lv_color_hex(C_GREEN_DARK), 0);
-  lv_label_set_text_fmt(lblRcWeight, "%.1f kg", weightKg);
-  lv_label_set_text(lblRcCat, category.c_str());
-  lv_label_set_text_fmt(lblRcPurok, "Purok %d", purok);
-  lv_label_set_text_fmt(lblRcRecyc, "%d items", detRecyc);
-  goTo(scrReceipt);
-}
-
-void buildWeigh() {
-  static const char *kmap[] = {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", ".", "0", LV_SYMBOL_BACKSPACE, ""};
-  scrWeigh = box(nullptr, 800, 480, C_BG);
-  lv_obj_set_pos(label(scrWeigh, "Weigh & confirm", &lv_font_montserrat_22, C_TEXT), 28, 22);
-  lv_obj_t *step = label(scrWeigh, "Step 2 of 3", &lv_font_montserrat_12, C_TEXT2);
-  lv_obj_align(step, LV_ALIGN_TOP_RIGHT, -28, 28);
-
-  lv_obj_t *card = box(scrWeigh, 300, 316, C_GREEN_DARK);
-  lv_obj_set_style_radius(card, 16, 0);
-  lv_obj_set_pos(card, 28, 64);
-  lv_obj_set_pos(label(card, USE_HX711 ? "SCALE READING" : "ENTER WEIGHT (KG)", &lv_font_montserrat_12, C_GREEN_TXT), 20, 16);
-  lblWeight = label(card, "0", &lv_font_montserrat_40, 0xFFFFFF);
-  lv_obj_set_pos(lblWeight, 20, 36);
-  lblWeightState = label(card, "kg", &lv_font_montserrat_20, C_GREEN_TXT);
-  lv_obj_align_to(lblWeightState, lblWeight, LV_ALIGN_OUT_RIGHT_BOTTOM, 8, -4);
-  kpWeight = lv_btnmatrix_create(card);
-  lv_btnmatrix_set_map(kpWeight, kmap);
-  lv_obj_set_size(kpWeight, 270, 210);
-  lv_obj_set_pos(kpWeight, 15, 94);
-  lv_obj_set_style_bg_opa(kpWeight, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(kpWeight, 0, 0);
-  lv_obj_set_style_pad_all(kpWeight, 0, 0);
-  lv_obj_set_style_pad_gap(kpWeight, 6, 0);
-  lv_obj_set_style_bg_color(kpWeight, lv_color_hex(0x2C6B45), LV_PART_ITEMS);
-  lv_obj_set_style_text_color(kpWeight, lv_color_hex(0xFFFFFF), LV_PART_ITEMS);
-  lv_obj_set_style_text_font(kpWeight, &lv_font_montserrat_22, LV_PART_ITEMS);
-  lv_obj_set_style_shadow_width(kpWeight, 0, LV_PART_ITEMS);
-  lv_obj_add_event_cb(kpWeight, onWeightKey, LV_EVENT_VALUE_CHANGED, nullptr);
-
-  lv_obj_set_pos(label(scrWeigh, "CATEGORY - from camera", &lv_font_montserrat_12, C_TEXT2), 348, 64);
-  for (int i = 0; i < 4; i++) {
-    btnCat[i] = button(scrWeigh, CATS[i], 202, 48, C_CARD, C_TEXT, &lv_font_montserrat_14, onCat, (void *)(intptr_t)i);
-    lv_obj_set_style_radius(btnCat[i], 10, 0);
-    lv_obj_set_pos(btnCat[i], 348 + (i % 2) * 212, 86 + (i / 2) * 56);
-  }
-  lv_obj_set_pos(label(scrWeigh, "YOUR PUROK", &lv_font_montserrat_12, C_TEXT2), 348, 212);
-  for (int i = 0; i < NUM_PUROKS; i++) {
-    char t[4]; snprintf(t, sizeof t, "%d", i + 1);
-    btnPurok[i] = button(scrWeigh, t, 54, 54, C_CARD, C_TEXT, &lv_font_montserrat_20, onPurok, (void *)(intptr_t)(i + 1));
-    lv_obj_set_style_radius(btnPurok[i], 10, 0);
-    lv_obj_set_pos(btnPurok[i], 348 + i * 60, 234);
-  }
-  lv_obj_t *b = button(scrWeigh, "Back", 140, 60, C_MUTED_BG, C_TEXT, &lv_font_montserrat_16, onWeighBack);
-  lv_obj_set_pos(b, 28, 396);
-  btnConfirm = button(scrWeigh, "Confirm drop-off", 594, 60, C_GREEN, 0xFFFFFF, &lv_font_montserrat_20, onConfirm);
-  lv_obj_set_pos(btnConfirm, 178, 396);
-#if USE_HX711
-  lv_obj_add_flag(kpWeight, LV_OBJ_FLAG_HIDDEN);   // scale fills the weight instead
-#endif
-}
-
-// ------------------------------------------------------------ screen: Receipt
-void onDone(lv_event_t *) { goTo(scrHome); }
-
-void receiptTick(lv_timer_t *) {
-  if (--receiptCountdown <= 0) { goTo(scrHome); return; }
-  lv_label_set_text_fmt(lblCountdown, "Returning to start in %d s", receiptCountdown);
-}
-
-static lv_obj_t *rcRow(lv_obj_t *card, int y, const char *k, lv_obj_t **v) {
-  lv_obj_set_pos(label(card, k, &lv_font_montserrat_16, C_TEXT2), 20, y);
-  *v = label(card, "-", &lv_font_montserrat_16, C_TEXT);
-  lv_obj_align(*v, LV_ALIGN_TOP_RIGHT, -20, y);
-  return *v;
-}
-
-void buildReceipt() {
-  scrReceipt = box(nullptr, 800, 480, C_BG);
-  lv_obj_t *ok = box(scrReceipt, 64, 64, C_GREEN);
-  lv_obj_set_style_radius(ok, 32, 0);
-  lv_obj_set_pos(ok, 32, 28);
-  lv_obj_center(label(ok, LV_SYMBOL_OK, &lv_font_montserrat_28, 0xFFFFFF));
-  lv_obj_t *h = label(scrReceipt, "Salamat!\nDrop-off recorded.", &lv_font_montserrat_28, C_TEXT);
-  lv_obj_set_pos(h, 32, 110);
-  lv_obj_t *p = label(scrReceipt, "Show this code to the MRF staff if they ask. It's also saved in today's intake records.",
-                      &lv_font_montserrat_16, C_TEXT2);
-  lv_label_set_long_mode(p, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(p, 400);
-  lv_obj_set_pos(p, 32, 196);
-  lblCountdown = label(scrReceipt, "", &lv_font_montserrat_14, C_TEXT2);
-  lv_obj_set_pos(lblCountdown, 32, 360);
-  lv_obj_t *d = button(scrReceipt, "Done", 408, 64, C_GREEN, 0xFFFFFF, &lv_font_montserrat_20, onDone);
-  lv_obj_set_pos(d, 32, 388);
-
-  lv_obj_t *card = box(scrReceipt, 300, 424, C_CARD);
-  lv_obj_set_style_radius(card, 16, 0);
-  lv_obj_set_style_border_width(card, 1, 0);
-  lv_obj_set_style_border_color(card, lv_color_hex(C_LINE), 0);
-  lv_obj_set_pos(card, 468, 28);
-  lv_obj_set_pos(label(card, "RECEIPT CODE", &lv_font_montserrat_12, C_TEXT2), 20, 22);
-  lblCode = label(card, "...", &lv_font_montserrat_40, C_GREEN_DARK);
-  lv_obj_set_pos(lblCode, 20, 44);
-  lv_obj_t *ln = box(card, 260, 1, C_MUTED_BG);
-  lv_obj_set_pos(ln, 20, 104);
-  rcRow(card, 120, "Weight", &lblRcWeight);
-  rcRow(card, 152, "Category", &lblRcCat);
-  rcRow(card, 184, "Purok", &lblRcPurok);
-  rcRow(card, 216, "Recyclables seen", &lblRcRecyc);
-  lv_obj_t *tip = box(card, 260, 72, C_AMBER_BG);
-  lv_obj_set_style_radius(tip, 10, 0);
-  lv_obj_set_pos(tip, 20, 330);
-  lv_obj_t *tl = label(tip, "Tip: separate bottles and cans next time for a \"Segregated\" record.", &lv_font_montserrat_14, C_AMBER_TXT);
-  lv_label_set_long_mode(tl, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(tl, 236);
-  lv_obj_center(tl);
-}
-
-// ------------------------------------------------------------ screen: Operator PIN
-void refreshPin() {
-  for (int i = 0; i < 4; i++) {
-    bool on = i < (int)pinEntry.length();
-    lv_obj_set_style_bg_opa(pinDots[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-  }
-}
-
-void onPinKey(lv_event_t *e) {
-  lv_obj_t *m = lv_event_get_target(e);
-  const char *k = lv_btnmatrix_get_btn_text(m, lv_btnmatrix_get_selected_btn(m));
-  if (!k) return;
-  lv_label_set_text(lblPinMsg, "");
-  if (!strcmp(k, "Clear")) pinEntry = "";
-  else if (!strcmp(k, "Enter")) {
-    if (pinEntry.length() != 4) { lv_label_set_text(lblPinMsg, "Enter all 4 digits"); }
-    else if (pcUp) {                       // PC checks it against OPERATOR_PINS
-      JsonDocument d; d["type"] = "pin"; d["pin"] = pinEntry; wsSend(d);
-      lv_label_set_text(lblPinMsg, "Checking...");
-      pinAskedAt = millis();
-    } else if (pinEntry == KIOSK_PIN) {    // PC offline: use the kiosk's own PIN
-      lv_table_set_row_cnt(tblRecent, 2);
-      lv_table_set_cell_value(tblRecent, 1, 0, "-");
-      lv_table_set_cell_value(tblRecent, 1, 3, "Camera PC offline");
-      goTo(scrOp);
-    } else {
-      pinEntry = "";
-      lv_label_set_text(lblPinMsg, "Wrong PIN (camera PC offline)");
-    }
-  } else if (pinEntry.length() < 4) pinEntry += k;
-  refreshPin();
-}
-
-void buildPin() {
-  static const char *pmap[] = {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", "Clear", "0", "Enter", ""};
-  scrPin = box(nullptr, 800, 480, C_BG);
-  lv_obj_t *side = box(scrPin, 360, 480, C_GREEN_DARK);
-  lv_obj_set_pos(label(side, "OPERATOR MODE", &lv_font_montserrat_12, C_GREEN_TXT), 28, 32);
-  lv_obj_set_pos(label(side, "Enter your\n4-digit PIN", &lv_font_montserrat_28, 0xFFFFFF), 28, 58);
-  for (int i = 0; i < 4; i++) {
-    pinDots[i] = box(side, 22, 22, 0xFFFFFF);
-    lv_obj_set_style_radius(pinDots[i], 11, 0);
-    lv_obj_set_style_border_width(pinDots[i], 2, 0);
-    lv_obj_set_style_border_color(pinDots[i], lv_color_hex(0x9FBBA9), 0);
-    lv_obj_set_pos(pinDots[i], 28 + i * 36, 150);
-  }
-  lblPinMsg = label(side, "", &lv_font_montserrat_14, 0xFFB4A8);
-  lv_obj_set_pos(lblPinMsg, 28, 190);
-  lv_obj_t *back = button(side, "Back to drop-off", 304, 52, C_GREEN_DARK, 0xFFFFFF, &lv_font_montserrat_16, onCancel);
-  lv_obj_set_style_border_width(back, 1, 0);
-  lv_obj_set_style_border_color(back, lv_color_hex(0x5E8C70), 0);
-  lv_obj_set_pos(back, 28, 400);
-
-  lv_obj_t *kp = lv_btnmatrix_create(scrPin);
-  lv_btnmatrix_set_map(kp, pmap);
-  lv_obj_set_size(kp, 404, 424);
-  lv_obj_set_pos(kp, 378, 28);
-  lv_obj_set_style_bg_opa(kp, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_width(kp, 0, 0);
-  lv_obj_set_style_pad_all(kp, 0, 0);
-  lv_obj_set_style_pad_gap(kp, 12, 0);
-  lv_obj_set_style_bg_color(kp, lv_color_hex(C_CARD), LV_PART_ITEMS);
-  lv_obj_set_style_border_color(kp, lv_color_hex(C_LINE), LV_PART_ITEMS);
-  lv_obj_set_style_border_width(kp, 1, LV_PART_ITEMS);
-  lv_obj_set_style_radius(kp, 14, LV_PART_ITEMS);
-  lv_obj_set_style_shadow_width(kp, 0, LV_PART_ITEMS);
-  lv_obj_set_style_text_font(kp, &lv_font_montserrat_28, LV_PART_ITEMS);
-  lv_obj_set_style_text_color(kp, lv_color_hex(C_TEXT), LV_PART_ITEMS);
-  lv_obj_add_event_cb(kp, onPinKey, LV_EVENT_VALUE_CHANGED, nullptr);
-}
-
-// ------------------------------------------------------------ screen: Operator station
-void onOpLock(lv_event_t *) { JsonDocument d; d["type"] = "lock"; wsSend(d); goTo(scrHome); }
-void onOpRefresh(lv_event_t *) { JsonDocument d; d["type"] = "recent"; wsSend(d); }
-
-void buildOperator() {
-  scrOp = box(nullptr, 800, 480, C_BG);
-  lv_obj_t *side = box(scrOp, 168, 480, C_GREEN_DARK);
-  lv_obj_set_pos(label(side, "SapulMRF", &lv_font_montserrat_16, 0xFFFFFF), 16, 22);
-  lv_obj_t *nav = box(side, 148, 44, C_BG);
-  lv_obj_set_style_radius(nav, 8, 0);
-  lv_obj_set_pos(nav, 10, 64);
-  lv_obj_align(label(nav, "Intake", &lv_font_montserrat_14, C_GREEN_DARK), LV_ALIGN_LEFT_MID, 10, 0);
-  lv_obj_t *lock = button(side, LV_SYMBOL_CLOSE " Lock", 148, 44, C_GREEN_DARK, 0xFFFFFF, &lv_font_montserrat_14, onOpLock);
-  lv_obj_set_style_border_width(lock, 1, 0);
-  lv_obj_set_style_border_color(lock, lv_color_hex(0x5E8C70), 0);
-  lv_obj_set_pos(lock, 10, 420);
-
-  lv_obj_set_pos(label(scrOp, "Intake records", &lv_font_montserrat_20, C_TEXT), 186, 16);
-  lv_obj_set_pos(label(scrOp, "Newest first - from the kiosk bridge", &lv_font_montserrat_12, C_TEXT2), 186, 42);
-  lv_obj_t *r = button(scrOp, LV_SYMBOL_REFRESH " Refresh", 130, 44, C_GREEN, 0xFFFFFF, &lv_font_montserrat_14, onOpRefresh);
-  lv_obj_align(r, LV_ALIGN_TOP_RIGHT, -112, 14);     // leaves room for the battery pill
-
-  tblRecent = lv_table_create(scrOp);
-  lv_obj_set_pos(tblRecent, 186, 74);
-  lv_obj_set_size(tblRecent, 596, 392);
-  lv_table_set_col_cnt(tblRecent, 5);
-  const int cw[5] = {90, 104, 100, 190, 100};
-  const char *hd[5] = {"Code", "Time", "Purok", "Category", "Weight"};
-  for (int i = 0; i < 5; i++) { lv_table_set_col_width(tblRecent, i, cw[i]); lv_table_set_cell_value(tblRecent, 0, i, hd[i]); }
-  lv_obj_set_style_text_font(tblRecent, &lv_font_montserrat_14, LV_PART_ITEMS);
-  lv_obj_set_style_pad_ver(tblRecent, 10, LV_PART_ITEMS);
-  lv_obj_set_style_border_color(tblRecent, lv_color_hex(C_LINE), 0);
-  lv_obj_set_style_radius(tblRecent, 10, 0);
-}
-
-// ------------------------------------------------------------ navigation
-void goTo(lv_obj_t *scr) {
-  lv_obj_t *cur = lv_scr_act();
-  if (cur == scrScan && scr != scrScan) setMode("idle");
-  if (scr == scrScan) {
-    detRecyc = detResid = detBio = 0; detStable = false;
-    lv_obj_clear_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_state(btnNextScan, LV_STATE_DISABLED);
-    setMode("scan");
-  }
-  if (scr == scrWeigh) {
-    if (!USE_HX711 && cur == scrScan) { weightEntry = ""; weightKg = 0; }
-    refreshWeigh();
-  }
-  if (scr == scrReceipt) {
-    receiptCountdown = RECEIPT_RETURN_S;
-    lv_label_set_text_fmt(lblCountdown, "Returning to start in %d s", receiptCountdown);
-    if (!receiptTimer) receiptTimer = lv_timer_create(receiptTick, 1000, nullptr);
-    else lv_timer_resume(receiptTimer);
-  } else if (receiptTimer) lv_timer_pause(receiptTimer);
-  if (scr == scrHome) { purok = 0; category = CATS[0]; JsonDocument d; d["type"] = "stats"; wsSend(d); }
-  if (scr == scrPin) { pinEntry = ""; lv_label_set_text(lblPinMsg, ""); refreshPin(); }
-  lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_ON, 150, 0, false);
-}
-
 // ------------------------------------------------------------ screenshots
-static const char *screenName(lv_obj_t *s) {
-  return s == scrHome ? "welcome" : s == scrScan ? "scan" : s == scrWeigh ? "weigh" : s == scrReceipt ? "receipt"
-       : s == scrPin ? "pin" : s == scrOp ? "operator" : "other";
-}
-
-lv_obj_t *screenByName(const char *n) {
-  lv_obj_t *all[] = {scrHome, scrScan, scrWeigh, scrReceipt, scrPin, scrOp};
-  for (lv_obj_t *s : all) if (!strcmp(screenName(s), n)) return s;
-  return nullptr;
-}
-
 // The frame on screen right now, as it really looks: a 'shot' message naming the screen, then the raw
 // 800x480 RGB565 (little-endian) frame as an 'S' packet. The PC saves it as a PNG.
 void sendSnapshot() {
-  JsonDocument d; d["type"] = "shot"; d["screen"] = screenName(lv_scr_act()); wsSend(d);
+  JsonDocument d; d["type"] = "shot"; d["screen"] = uiScreenName(); wsSend(d);
   sendPacket('S', (const uint8_t *)displayShown(), 800 * 480 * 2);
 }
 
@@ -611,12 +107,12 @@ int jpegDraw(JPEGDRAW *p) {                 // copy decoded block into the frame
       int dy = p->y + y;
       if (dy >= FRAME_H) break;
       int w = min(p->iWidth, FRAME_W - p->x);
-      memcpy(&frameBuf[dy * FRAME_W + p->x], src, w * 2);
+      memcpy(&uiFrameBuf[dy * FRAME_W + p->x], src, w * 2);
     } else {
       int dy = (p->y + y) * 2, dx = p->x * 2;
       if (dy + 1 >= FRAME_H) break;
       int w = min(p->iWidth, (FRAME_W - dx) / 2);
-      uint16_t *row = &frameBuf[dy * FRAME_W + dx];
+      uint16_t *row = &uiFrameBuf[dy * FRAME_W + dx];
       for (int x = 0; x < w; x++) row[2 * x] = row[2 * x + 1] = src[x];
       memcpy(row + FRAME_W, row, w * 4);    // the second line is a copy of the first
     }
@@ -627,7 +123,7 @@ int jpegDraw(JPEGDRAW *p) {                 // copy decoded block into the frame
 uint32_t statFrames = 0, statDecodeMs = 0;   // video frames shown and their decode time, per stats period
 
 void onFrame(uint8_t *data, size_t len) {
-  if (lv_scr_act() != scrScan) return;
+  if (!uiWantsVideo()) return;            // other screens, or frozen on a result
   if (jpeg.openRAM(data, len, jpegDraw)) {
     uint32_t t0 = millis();
     videoScale = jpeg.getWidth() * 2 <= FRAME_W ? 2 : 1;
@@ -636,8 +132,7 @@ void onFrame(uint8_t *data, size_t len) {
     jpeg.close();
     statDecodeMs += millis() - t0;
     statFrames++;
-    lv_obj_add_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_invalidate(imgVideo);
+    uiOnFrameShown(detFps);
   }
 }
 
@@ -645,78 +140,26 @@ void onText(uint8_t *data, size_t len) {
   JsonDocument d;
   if (deserializeJson(d, data, len)) return;
   const char *t = d["type"] | "";
-  if (!strcmp(t, "det")) {
-    detRecyc = d["recyclable"] | 0; detResid = d["residual"] | 0; detBio = d["bio"] | 0;
-    detFps = d["fps"] | 0; detStable = d["stable"] | false;
-    const char *cat = d["category"] | "Nothing detected";
-    lv_label_set_text_fmt(lblRecyc, "%d", detRecyc);
-    lv_label_set_text_fmt(lblResid, "%d", detResid);
-    lv_label_set_text_fmt(lblBio, "%d", detBio);
-    lv_label_set_text_fmt(lblFps, LV_SYMBOL_VIDEO " LIVE %d fps", detFps);
-    if (!strcmp(cat, "Nothing detected")) {
-      lv_label_set_text(lblHint, "Show your waste to the camera");
-    } else {
-      lv_label_set_text_fmt(lblHint, "Looks like %s.\n%s", cat, detStable ? "Got it - tap Next." : "Hold steady...");
-      for (int i = 0; i < 4; i++) if (!strcmp(cat, CATS[i])) category = CATS[i];
-    }
-    if (detStable) lv_obj_clear_state(btnNextScan, LV_STATE_DISABLED);
-  } else if (!strcmp(t, "receipt")) {
-    bool saved = d["ok"] | true;            // ok:false = the PC couldn't save it
-    lv_label_set_text(lblCode, saved ? (d["code"] | "OFFLINE") : "NOT SAVED");
-    lv_obj_set_style_text_color(lblCode, lv_color_hex(saved ? C_GREEN_DARK : C_RED), 0);
-  } else if (!strcmp(t, "alerts")) {
-    JsonArray items = d["items"];
-    if (items.size() == 0) {
-      lv_obj_add_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      const char *title = items[0]["title"] | "";
-      if (items.size() > 1) lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s  (+%d more)", title, (int)items.size() - 1);
-      else lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s", title);
-      lv_obj_clear_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
-    }
-  } else if (!strcmp(t, "snapshot")) {     // the PC asks for a screenshot (design review, thesis figures)
-    sendSnapshot();
-#if DEV_TOOLS
-  } else if (!strcmp(t, "goto")) {         // dev only: the PC moves the kiosk to a screen for a screenshot
-    lv_obj_t *scr = screenByName(d["screen"] | "");
-    if (scr) goTo(scr);
-#endif
-  } else if (!strcmp(t, "actuate")) {
-    if (d["light"].is<const char *>()) setLight(d["light"]);
+  if (!strcmp(t, "det")) { detFps = d["fps"] | 0; uiOnDet(d); }
+  else if (!strcmp(t, "receipt")) uiOnReceipt(d);
+  else if (!strcmp(t, "alerts")) uiOnAlerts(d);
+  else if (!strcmp(t, "stats")) uiOnStats((float)(d["kg"] | 0.0), (int)(d["drops"] | 0));
+  else if (!strcmp(t, "auth")) uiOnAuth(d);
+  else if (!strcmp(t, "recent")) uiOnRecent(d);
+  else if (!strcmp(t, "actuate")) {
+    if (d["light"].is<const char *>()) uiSetLight(d["light"]);
     beep(d["buzz"] | 0);
-  } else if (!strcmp(t, "stats")) {
-    lv_label_set_text_fmt(lblTodayKg, "%.1f kg", (float)(d["kg"] | 0.0));
-    lv_label_set_text_fmt(lblTodayDrops, "collected from %d drop-offs", (int)(d["drops"] | 0));
-  } else if (!strcmp(t, "auth")) {
-    pinAskedAt = 0;
-    if (d["ok"] | false) { onOpRefresh(nullptr); goTo(scrOp); }
-    else { pinEntry = ""; refreshPin(); lv_label_set_text(lblPinMsg, "Wrong PIN, try again"); }
-  } else if (!strcmp(t, "recent")) {
-    JsonArray rows = d["rows"];
-    lv_table_set_row_cnt(tblRecent, rows.size() + 1);
-    int r = 1;
-    for (JsonObject o : rows) {
-      lv_table_set_cell_value(tblRecent, r, 0, o["code"] | "");
-      lv_table_set_cell_value(tblRecent, r, 1, o["time"] | "");
-      lv_table_set_cell_value(tblRecent, r, 2, o["purok"] | "");
-      lv_table_set_cell_value(tblRecent, r, 3, o["cat"] | "");
-      lv_table_set_cell_value(tblRecent, r, 4, o["kg"] | "");
-      r++;
-    }
   }
+  else if (!strcmp(t, "snapshot")) sendSnapshot();   // the PC asks for a screenshot (design review, thesis)
+#if DEV_TOOLS
+  else if (!strcmp(t, "goto")) uiGoto(d["screen"] | "");   // dev only: show a screen, or "en"/"tl"
+#endif
 }
 
 // ------------------------------------------------------------ PC link (TCP server, like sapul stream)
 void setPcStatus(bool up) {
   pcUp = up;
-  lv_label_set_text(lblCamStatus, up ? LV_SYMBOL_OK " Connected" : LV_SYMBOL_CLOSE " Waiting");
-  lv_obj_set_style_text_color(lblCamStatus, lv_color_hex(up ? C_GREEN_OK : 0xF2A33A), 0);
-  if (!up && lv_scr_act() == scrScan) {
-    lv_label_set_text(lblVideoWait, "Camera PC disconnected - waiting...");
-    lv_obj_clear_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);   // it is hidden once video has played
-  }
-  if (lv_scr_act() == scrWeigh) refreshWeigh();
-  if (!up) setLight("red");                // no PC = no SapulMRF: nothing can be recorded
+  uiSetPcUp(up);
 }
 
 void handlePacket() {
@@ -737,7 +180,7 @@ void pcLoop() {
     rxHdrGot = 0; rxType = 0;
     Serial.printf("PC connected from %s\n", pc.remoteIP().toString().c_str());
     setPcStatus(true);
-    setMode(lv_scr_act() == scrScan ? "scan" : "idle");
+    setMode(uiWantsVideo() ? "scan" : "idle");
     JsonDocument d; d["type"] = "stats"; wsSend(d);
   }
   if (pcUp && !pc.connected()) {
@@ -770,7 +213,7 @@ void pcLoop() {
 
 // ------------------------------------------------------------ Wi-Fi / hotspot
 void showNet(const char *line) {
-  lv_label_set_text(lblNet, line);
+  uiSetNet(line, "");
   lv_timer_handler();
 }
 
@@ -799,16 +242,16 @@ void netStart() {
     apMode = false;
     WiFi.setAutoReconnect(true);
     netIp = WiFi.localIP().toString();
-    lv_label_set_text_fmt(lblNet, LV_SYMBOL_WIFI " Wi-Fi: %s", netName.c_str());
   } else {                                // no network found: be the hotspot
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASS);
     apMode = true;
     netName = AP_SSID;
     netIp = WiFi.softAPIP().toString();
-    lv_label_set_text_fmt(lblNet, LV_SYMBOL_WIFI " Hotspot: %s", AP_SSID);
   }
-  lv_label_set_text(lblIp, netIp.c_str());
+  char line[64];
+  snprintf(line, sizeof line, LV_SYMBOL_WIFI " %s: %s", apMode ? "Hotspot" : "Wi-Fi", netName.c_str());
+  uiSetNet(line, ("Kiosk IP " + netIp).c_str());
   Serial.printf("%s %s  IP %s  port %d\n", apMode ? "Hotspot" : "Wi-Fi", netName.c_str(), netIp.c_str(), STREAM_PORT);
   server.begin();
   server.setNoDelay(true);
@@ -832,8 +275,9 @@ void beaconLoop() {                       // lets the PC script find the kiosk w
     String now = up ? WiFi.localIP().toString() : String("-");
     if (now != netIp) {
       netIp = now;
-      lv_label_set_text(lblIp, netIp.c_str());
-      lv_label_set_text_fmt(lblNet, up ? LV_SYMBOL_WIFI " Wi-Fi: %s" : LV_SYMBOL_WARNING " Lost %s", netName.c_str());
+      char line[64];
+      snprintf(line, sizeof line, up ? LV_SYMBOL_WIFI " Wi-Fi: %s" : LV_SYMBOL_WARNING " Lost %s", netName.c_str());
+      uiSetNet(line, ("Kiosk IP " + netIp).c_str());
     }
   }
 }
@@ -865,31 +309,6 @@ float lipoPercent(float mv) {             // resting Li-ion curve, single cell
   return 100;
 }
 
-void buildBatteryPill() {                 // on lv_layer_top(): visible on every screen
-  batPill = box(lv_layer_top(), 96, 24, C_CARD);
-  lv_obj_set_style_radius(batPill, 12, 0);
-  lv_obj_set_style_border_width(batPill, 1, 0);
-  lv_obj_set_style_border_color(batPill, lv_color_hex(C_LINE), 0);
-  lv_obj_align(batPill, LV_ALIGN_TOP_RIGHT, -8, 4);
-  lv_obj_clear_flag(batPill, LV_OBJ_FLAG_CLICKABLE);
-  lblBat = label(batPill, LV_SYMBOL_BATTERY_EMPTY " --%", &lv_font_montserrat_14, C_TEXT);
-  lv_obj_center(lblBat);
-  lv_obj_add_flag(batPill, LV_OBJ_FLAG_HIDDEN);
-}
-
-// The MRF's status as SapulMRF decides it: green ok, amber open alert, red storage full or PC link lost.
-void setLight(const char *c) {
-  uint32_t col = !strcmp(c, "green") ? C_GREEN : !strcmp(c, "amber") ? 0xF2A33A : !strcmp(c, "red") ? C_RED : C_LINE;
-  lv_obj_set_style_bg_color(statusDot, lv_color_hex(col), 0);
-}
-
-void buildStatusDot() {                   // on lv_layer_top(), left of the battery pill
-  statusDot = box(lv_layer_top(), 16, 16, C_LINE);   // grey until the first state arrives
-  lv_obj_set_style_radius(statusDot, LV_RADIUS_CIRCLE, 0);
-  lv_obj_align(statusDot, LV_ALIGN_TOP_RIGHT, -112, 8);
-  lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_CLICKABLE);
-}
-
 void beep(int n) {
   // shortcut: no buzzer fitted yet, so only logged; drive it here once the actuator board is wired (plan step 4)
   if (n > 0) Serial.printf("Beep x%d\n", n);
@@ -911,7 +330,7 @@ void batteryLoop() {
   if (!inaRead(0x02, rb) || !inaRead(0x01, rs)) return;
   batMv = (rb >> 3) * 4.0f;                              // bus voltage, 4 mV/bit
   batMa = ((int16_t)rs * 0.01f) / INA219_SHUNT_OHM;      // shunt 10 uV/bit -> mA (+ = discharging)
-  if (batMv < 2500) { lv_obj_add_flag(batPill, LV_OBJ_FLAG_HIDDEN); return; }  // no cell on VIN+
+  if (batMv < 2500) { uiSetBattery("", 0, false); return; }  // no cell on VIN+
 
   bool charging = batMa < BATTERY_CHARGE_MA;
   float restMv = batMv + (batMa > 0 ? batMa * BATTERY_INTERNAL_MOHM / 1000.0f : 0);  // undo load sag
@@ -922,10 +341,9 @@ void batteryLoop() {
   const char *sym = charging ? LV_SYMBOL_CHARGE
                   : pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3
                   : pct > 30 ? LV_SYMBOL_BATTERY_2 : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
-  lv_label_set_text_fmt(lblBat, "%s %d%%", sym, pct);
+  char txt[24]; snprintf(txt, sizeof txt, "%s %d%%", sym, pct);
   bool low = pct < BATTERY_LOW_PCT && !charging;
-  lv_obj_set_style_text_color(lblBat, lv_color_hex(low ? C_RED : charging ? C_GREEN : C_TEXT), 0);
-  lv_obj_clear_flag(batPill, LV_OBJ_FLAG_HIDDEN);
+  uiSetBattery(txt, low ? T_ERR : charging ? T_OK : T_INK, true);
 
   if (millis() - lastLog > 10000) {
     lastLog = millis();
@@ -980,10 +398,7 @@ void setup() {
   lv_indev_drv_register(&indev_drv);
 
   rxBuf = (uint8_t *)ps_malloc(MAX_PACKET);
-  buildHome(); buildScan(); buildWeigh(); buildReceipt(); buildPin(); buildOperator();
-  buildBatteryPill();
-  buildStatusDot();
-  lv_scr_load(scrHome);
+  uiBegin();
   lv_timer_handler();
 
   batteryInit();
@@ -993,7 +408,6 @@ void setup() {
   scale.begin(HX711_DOUT, HX711_SCK);
   scale.set_scale(HX711_SCALE);
   scale.tare();
-  weightManual = false;
 #endif
 
   netStart();                            // Wi-Fi -> phone hotspot -> own hotspot
@@ -1020,23 +434,12 @@ void loop() {
 
 #if USE_HX711
   static uint32_t lastW = 0;
-  if (lv_scr_act() == scrWeigh && millis() - lastW > 300 && scale.is_ready()) {
+  if (millis() - lastW > 300 && scale.is_ready()) {
     lastW = millis();
-    weightKg = max(0.0f, scale.get_units(3));
-    weightManual = false;
-    refreshWeigh();
+    uiSetWeightFromScale(max(0.0f, scale.get_units(3)));
   }
 #endif
 
-  if (pinAskedAt && millis() - pinAskedAt > 3000) {   // PC never answered the PIN
-    pinAskedAt = 0;
-    pinEntry = ""; refreshPin();
-    lv_label_set_text(lblPinMsg, "No answer from camera PC - try again");
-  }
-
-  if (lv_scr_act() != scrHome && lv_disp_get_inactive_time(nullptr) > IDLE_RETURN_MS) {
-    goTo(scrHome);
-    lv_disp_trig_activity(nullptr);
-  }
+  uiLoop();
   delay(2);
 }
