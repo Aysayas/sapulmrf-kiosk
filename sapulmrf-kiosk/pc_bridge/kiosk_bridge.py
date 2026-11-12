@@ -260,7 +260,10 @@ class Bridge:
                 if kind == b"A":
                     self.ack.set()
                 elif kind == b"M":
-                    self.on_message(json.loads(payload))
+                    try:
+                        self.on_message(json.loads(payload))
+                    except Exception as e:  # one bad message must not drop the kiosk link
+                        print("message error:", type(e).__name__, e)
         except (OSError, ConnectionError, ValueError) as e:
             if self.alive:
                 print("link error:", e)
@@ -274,7 +277,12 @@ class Bridge:
             self.ack.set()
             print("kiosk mode:", self.mode)
         elif t == "intake":
-            code = self.save_intake(msg)
+            try:
+                code = self.save_intake(msg)
+            except Exception as e:  # e.g. kiosk_intake.csv open in Excel: tell the kiosk, keep the link
+                print("intake NOT saved:", type(e).__name__, e, msg)
+                self.send_json({"type": "receipt", "ok": False})
+                return
             print("intake saved:", code, msg)
             self.send_json({"type": "receipt", "ok": True, "code": code})
             self.send_json(self.stats_today())

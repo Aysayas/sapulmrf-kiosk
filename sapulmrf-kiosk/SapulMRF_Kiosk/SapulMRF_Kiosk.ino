@@ -346,6 +346,7 @@ void onConfirm(lv_event_t *) {
   d["recyclables"] = detRecyc;
   wsSend(d);
   lv_label_set_text(lblCode, "...");
+  lv_obj_set_style_text_color(lblCode, lv_color_hex(C_GREEN_DARK), 0);
   lv_label_set_text_fmt(lblRcWeight, "%.1f kg", weightKg);
   lv_label_set_text(lblRcCat, category.c_str());
   lv_label_set_text_fmt(lblRcPurok, "Purok %d", purok);
@@ -633,7 +634,9 @@ void onText(uint8_t *data, size_t len) {
     }
     if (detStable) lv_obj_clear_state(btnNextScan, LV_STATE_DISABLED);
   } else if (!strcmp(t, "receipt")) {
-    lv_label_set_text(lblCode, d["code"] | "OFFLINE");
+    bool saved = d["ok"] | true;            // ok:false = the PC couldn't save it
+    lv_label_set_text(lblCode, saved ? (d["code"] | "OFFLINE") : "NOT SAVED");
+    lv_obj_set_style_text_color(lblCode, lv_color_hex(saved ? C_GREEN_DARK : 0xB42318), 0);
   } else if (!strcmp(t, "stats")) {
     lv_label_set_text_fmt(lblTodayKg, "%.1f kg", (float)(d["kg"] | 0.0));
     lv_label_set_text_fmt(lblTodayDrops, "collected from %d drop-offs", (int)(d["drops"] | 0));
