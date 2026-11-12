@@ -95,6 +95,11 @@ RECYCLABLE = {"bottle", "pet bottle", "plastic bottle", "can", "tin can", "alumi
               "glass bottle", "carton", "cardboard", "paper"}
 BIODEGRADABLE = {"food", "food waste", "leaves", "peel", "organic"}
 # anything else = residual (sachets, wrappers, styro, etc.)
+# The kiosk camera is also the sorting camera: these classes become material suggestions in SapulMRF
+# (its materials: Plastic, Paper, Cardboard, Metal). Classes not listed send no suggestion.
+MATERIALS = {"bottle": "Plastic", "pet bottle": "Plastic", "plastic bottle": "Plastic",
+             "can": "Metal", "tin can": "Metal", "aluminum can": "Metal",
+             "paper": "Paper", "cardboard": "Cardboard", "carton": "Cardboard"}
 IGNORED = {"person"}  # the resident's hand/arm is always in view; it must not decide the category
 
 COLORS = {"recyclable": (122, 195, 76), "residual": (58, 163, 242), "bio": (46, 90, 122)}  # BGR
@@ -192,7 +197,7 @@ class Bridge:
         self.history = deque(maxlen=STABLE_FRAMES)
         self.last = {"recyclable": 0, "residual": 0, "bio": 0, "category": "Nothing detected"}
         self.fps = 0.0
-        self.snapshot = None  # (det, clean full-res frame) at the last stable moment of this drop-off
+        self.snapshot = None  # (det, clean full-res frame, boxes) at the last stable moment of this drop-off
         self.state = None     # last kiosk-state from SapulMRF
         self.next_code = self._load_next_code()
 
@@ -249,7 +254,7 @@ class Bridge:
             if not scanning:
                 self.history.clear()  # only a resident's scan may become "stable", not someone watching online
             elif det["stable"]:
-                self.snapshot = (det, frame)  # what the camera decided, sent with the drop-off
+                self.snapshot = (det, frame, self.boxes)  # what the camera decided, sent with the drop-off
 
     def annotated(self, frame, boxes):
         out = frame.copy()
@@ -300,9 +305,14 @@ class Bridge:
                 "weight_kg": record["weight_kg"], "weighed_by": "manual" if record["manual"] else "scale",
                 "client_key": str(uuid.uuid4())}  # same key on every retry, so SapulMRF stores it once
         if self.snapshot:
-            det, frame = self.snapshot
+            det, frame, boxes = self.snapshot
             body["cv"] = {"category": det["category"], "confidence": det["conf"],
                           "counts": {k: det[k] for k in ("recyclable", "residual", "bio")}}
+            best = {}  # one suggestion per material, with its most confident box
+            for *_, name, conf, _b in boxes:
+                if (m := MATERIALS.get(name.lower())) and conf > best.get(m, 0):
+                    best[m] = conf
+            body["materials"] = [{"label": m, "confidence": round(c, 3)} for m, c in best.items()]
             ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, PHOTO_QUALITY])
             if ok:
                 body["photo"] = base64.b64encode(jpg.tobytes()).decode()
