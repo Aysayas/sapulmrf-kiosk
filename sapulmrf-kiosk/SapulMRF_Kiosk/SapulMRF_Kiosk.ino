@@ -316,8 +316,9 @@ void refreshWeigh() {
   for (int i = 0; i < NUM_PUROKS; i++) setChoice(btnPurok[i], purok == i + 1);
   if (weightManual) lv_label_set_text(lblWeight, weightEntry.length() ? weightEntry.c_str() : "0");
   else lv_label_set_text_fmt(lblWeight, "%.1f", weightKg);
-  bool ok = purok > 0 && weightKg > 0.05f;
+  bool ok = pcUp && purok > 0 && weightKg > 0.05f;   // without the PC the drop-off would be lost
   if (ok) lv_obj_clear_state(btnConfirm, LV_STATE_DISABLED); else lv_obj_add_state(btnConfirm, LV_STATE_DISABLED);
+  lv_label_set_text(lv_obj_get_child(btnConfirm, 0), pcUp ? "Confirm drop-off" : "Camera PC offline");
 }
 
 void onCat(lv_event_t *e) { category = CATS[(intptr_t)lv_event_get_user_data(e)]; refreshWeigh(); }
@@ -664,8 +665,11 @@ void setPcStatus(bool up) {
   pcUp = up;
   lv_label_set_text(lblCamStatus, up ? LV_SYMBOL_OK " Connected" : LV_SYMBOL_CLOSE " Waiting");
   lv_obj_set_style_text_color(lblCamStatus, lv_color_hex(up ? C_GREEN_OK : 0xF2A33A), 0);
-  if (!up && lv_scr_act() == scrScan)
+  if (!up && lv_scr_act() == scrScan) {
     lv_label_set_text(lblVideoWait, "Camera PC disconnected - waiting...");
+    lv_obj_clear_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);   // it is hidden once video has played
+  }
+  if (lv_scr_act() == scrWeigh) refreshWeigh();
 }
 
 void handlePacket() {
