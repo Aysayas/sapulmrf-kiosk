@@ -7,7 +7,8 @@ its own hotspot "SapulMRF-Kiosk" (then it is always 192.168.4.1).
 The PC just has to be on the same network as the kiosk.
 
   USB cam -> YOLO -> annotated JPEG frames + detection summary -> kiosk
-  kiosk  -> intake records / PIN / recent list -> this script -> CSV (+ SapulMRF backend, optional)
+  kiosk  -> intake records / PIN / recent list -> this script -> SapulMRF API (+ CSV log, outbox when offline)
+  SapulMRF API -> today's totals, alerts, light/buzzer -> this script -> kiosk   (polled every STATE_EVERY s)
 
 TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][payload]
   'J'  PC -> kiosk   JPEG frame (FRAME_W x FRAME_H), only while the kiosk is on the scan screen
@@ -16,8 +17,11 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
         PC -> kiosk  {"type":"det","recyclable":2,"residual":1,"bio":0,"category":"Mixed household","stable":true,"fps":8}
                      {"type":"receipt","ok":true,"code":"K-2854"} (ok:false = not saved)  {"type":"auth","ok":true}
                      {"type":"recent","rows":[...]}      {"type":"stats","kg":128.4,"drops":17}
+                     {"type":"alerts","items":[{"kind":"storage","title":"...","details":"..."}]}
+                     {"type":"actuate","light":"green"|"amber"|"red","buzz":1}
         kiosk -> PC  {"type":"mode","mode":"scan"|"idle"}  {"type":"intake",...}
                      {"type":"pin","pin":"1234"}  {"type":"recent"}  {"type":"stats"}  {"type":"lock"}
+                     {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
 UDP port 5001: the kiosk broadcasts "SAPULMRF <ip> <port>" every 2 s so this script can find it.
 
 Install:  pip install ultralytics opencv-python requests
@@ -26,13 +30,16 @@ Run:      python kiosk_bridge.py --model best.pt --cam 1             (finds the 
 """
 
 import argparse
+import base64
 import csv
+import glob
 import json
 import os
 import socket
 import struct
 import threading
 import time
+import uuid
 from collections import Counter, deque
 from datetime import datetime
 
@@ -61,10 +68,13 @@ STABLE_FRAMES = 12               # same category this many frames in a row = "st
 OPERATOR_PINS = {"1234": "Operator"}          # change these!
 LOCAL_LOG = "kiosk_intake.csv"                 # always written, even with a backend
 
-# Optional: your SapulMRF backend. Leave empty to run offline (CSV only).
-# The bridge POSTs JSON to BACKEND_URL + "/api/intake" and expects {"code": "D-2850"} back.
-BACKEND_URL = os.environ.get("SAPULMRF_API", "")
-BACKEND_TOKEN = os.environ.get("SAPULMRF_TOKEN", "")
+# SapulMRF API. The kiosk is registered there once as a weighing station (e.g. KIOSK-01);
+# its key is shown once in Settings > IoT devices. Leave SAPULMRF_API empty to run offline (CSV only).
+API_URL = os.environ.get("SAPULMRF_API", "").rstrip("/")   # e.g. http://127.0.0.1:8001
+API_KEY = os.environ.get("SAPULMRF_KEY", "")
+OUTBOX = "outbox"            # drop-offs SapulMRF hasn't accepted yet, one JSON file each
+STATE_EVERY = 5              # seconds between kiosk-state polls
+RETRY_EVERY = 15             # seconds between outbox retries
 
 # Map YOUR model's class names to the three kiosk buckets (lower-case).
 RECYCLABLE = {"bottle", "pet bottle", "plastic bottle", "can", "tin can", "aluminum can",
@@ -98,6 +108,32 @@ def category_from(counts: Counter) -> str:
     return "Mixed household"
 
 
+class Rejected(Exception):
+    """SapulMRF refused a drop-off for good (422): sending it again won't help."""
+
+
+def api(method, path, **kw):
+    """Call SapulMRF with the kiosk's key."""
+    return requests.request(method, API_URL + path, headers={"X-Device-Key": API_KEY}, timeout=5, **kw)
+
+
+def post_delivery(body):
+    """Send one drop-off. Returns the receipt, or None when it should be retried later."""
+    try:
+        r = api("POST", "/devices/deliveries", json=body)
+    except requests.RequestException as e:
+        print("SapulMRF unreachable:", type(e).__name__)
+        return None
+    if r.status_code == 201:
+        return r.json()
+    if r.status_code in (401, 403):
+        print("SapulMRF refused the kiosk key; check SAPULMRF_KEY:", r.text)
+        return None
+    if r.status_code >= 500:
+        return None
+    raise Rejected(r.text)
+
+
 # ---------------------------------------------------------------- state
 class Bridge:
     def __init__(self, model_path, cam_index):
@@ -116,6 +152,8 @@ class Bridge:
         self.history = deque(maxlen=STABLE_FRAMES)
         self.last = {"recyclable": 0, "residual": 0, "bio": 0, "category": "Nothing detected"}
         self.fps = 0.0
+        self.snapshot = None  # (det, jpeg) at the last stable moment of this drop-off
+        self.state = None     # last kiosk-state from SapulMRF
         self.next_code = self._load_next_code()
 
     # ----- one camera frame -> YOLO -> annotated JPEG + summary
@@ -125,12 +163,14 @@ class Bridge:
             return None, None
         res = self.model(frame, conf=CONF, verbose=False)[0]
         counts = Counter()
+        confs = []
         for box in res.boxes:
             name = self.model.names[int(box.cls)]
             if name in IGNORED:
                 continue
             b = bucket(name)
             counts[b] += 1
+            confs.append(float(box.conf))
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             color = COLORS[b]
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
@@ -142,11 +182,15 @@ class Bridge:
         self.history.append(cat)
         stable = len(self.history) == STABLE_FRAMES and len(set(self.history)) == 1 and cat != "Nothing detected"
         det = {"type": "det", "recyclable": counts["recyclable"], "residual": counts["residual"],
-               "bio": counts["bio"], "category": cat, "stable": stable, "fps": round(self.fps)}
+               "bio": counts["bio"], "category": cat, "stable": stable, "fps": round(self.fps),
+               "conf": round(sum(confs) / len(confs), 2) if confs else None}
         self.last = det
         small = cv2.resize(frame, (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
         ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-        return (jpg.tobytes() if ok else None), det
+        jpg = jpg.tobytes() if ok else None
+        if stable and jpg:
+            self.snapshot = (det, jpg)  # what the camera decided, sent with the drop-off
+        return jpg, det
 
     # ----- intake records
     def _load_next_code(self):
@@ -170,26 +214,62 @@ class Bridge:
             "recyclables_seen": int(msg.get("recyclables", 0)),
             "recorded_by": "Kiosk",
         }
-        code = None
-        if BACKEND_URL and requests:
+        body = {"source_area": record["source_area"], "category": record["category"],
+                "weight_kg": record["weight_kg"], "weighed_by": "manual" if record["manual"] else "scale",
+                "client_key": str(uuid.uuid4())}  # same key on every retry, so SapulMRF stores it once
+        if self.snapshot:
+            det, jpg = self.snapshot
+            body["cv"] = {"category": det["category"], "confidence": det["conf"],
+                          "counts": {k: det[k] for k in ("recyclable", "residual", "bio")}}
+            body["photo"] = base64.b64encode(jpg).decode()
+        code, actions = None, {}
+        if API_URL and requests:
             try:
-                headers = {"Authorization": f"Bearer {BACKEND_TOKEN}"} if BACKEND_TOKEN else {}
-                r = requests.post(BACKEND_URL.rstrip("/") + "/api/intake", json=record,
-                                  headers=headers, timeout=4)
-                r.raise_for_status()
-                code = r.json().get("code")
-            except Exception as e:  # keep the kiosk working even if the backend is down
-                print("backend error, saving locally:", e)
+                receipt = post_delivery(body)
+            except Rejected as e:  # e.g. a purok name SapulMRF doesn't know: keep it locally for the operator
+                print("SapulMRF rejected the drop-off, kept in outbox/rejected:", e)
+                self.to_outbox(body, os.path.join(OUTBOX, "rejected"))
+                receipt = None
+            else:
+                if receipt is None:
+                    self.to_outbox(body, OUTBOX)
+            if receipt:
+                code, actions = receipt["code"], receipt.get("actions", {})
         if not code:
             code = f"K-{self.next_code}"  # K = made by the kiosk; D- codes come from SapulMRF
-        self.next_code = max(self.next_code, int(code.split("-")[1]) + 1)
+            self.next_code += 1
         new = not os.path.exists(LOCAL_LOG)
         with open(LOCAL_LOG, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["code"] + list(record))
             if new:
                 w.writeheader()
             w.writerow({"code": code, **record})
-        return code
+        return code, actions
+
+    @staticmethod
+    def to_outbox(body, folder):
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, body["client_key"] + ".json"), "w") as f:
+            json.dump(body, f)
+
+    def outbox_loop(self):
+        """Send drop-offs saved while SapulMRF was down, oldest first, until it accepts or rejects them."""
+        while True:
+            for path in sorted(glob.glob(os.path.join(OUTBOX, "*.json")), key=os.path.getmtime):
+                with open(path) as f:
+                    body = json.load(f)
+                try:
+                    receipt = post_delivery(body)
+                except Rejected as e:
+                    print("outbox: SapulMRF rejected", body["client_key"], e)
+                    os.makedirs(os.path.join(OUTBOX, "rejected"), exist_ok=True)
+                    os.replace(path, os.path.join(OUTBOX, "rejected", os.path.basename(path)))
+                    continue
+                if receipt is None:
+                    break  # still offline: try again later, keeping the order
+                os.remove(path)
+                print("outbox: sent, SapulMRF code", receipt["code"])
+            time.sleep(RETRY_EVERY)
 
     def recent(self, n=6):
         if not os.path.exists(LOCAL_LOG):
@@ -214,6 +294,37 @@ class Bridge:
                         drops += 1
         return {"type": "stats", "kg": round(kg, 1), "drops": drops}
 
+    def stats(self):
+        """Today's totals from SapulMRF, or from the local CSV while it can't be reached."""
+        return {"type": "stats", **self.state["today"]} if self.state else self.stats_today()
+
+    def recent_rows(self):
+        if API_URL and requests:
+            try:
+                r = api("GET", "/devices/kiosk-recent")
+                if r.ok:
+                    return r.json()
+            except requests.RequestException:
+                pass
+        return self.recent()
+
+    def state_loop(self):
+        """Poll SapulMRF for the kiosk's totals, alerts and light, and pass them on."""
+        while self.alive:
+            try:
+                r = api("GET", "/devices/kiosk-state")
+                self.state = r.json() if r.ok else None
+            except requests.RequestException:
+                self.state = None
+            try:
+                self.send_json(self.stats())
+                if self.state:
+                    self.send_json({"type": "alerts", "items": self.state["alerts"]})
+                    self.send_json({"type": "actuate", **self.state["actuators"]})
+            except OSError:
+                return  # the kiosk link dropped; connect_and_serve starts a new loop
+            time.sleep(STATE_EVERY)
+
 
     # ----- link to the kiosk
     def connect_and_serve(self, host, port):
@@ -228,7 +339,10 @@ class Bridge:
         print(f"Connected to kiosk {host}:{port}")
         reader = threading.Thread(target=self.read_loop, daemon=True)
         reader.start()
-        self.send_json(self.stats_today())
+        if API_URL and requests:
+            threading.Thread(target=self.state_loop, daemon=True).start()
+        else:
+            self.send_json(self.stats_today())
         try:
             self.stream_loop()
         finally:
@@ -277,28 +391,38 @@ class Bridge:
         t = msg.get("type")
         if t == "mode":
             self.mode = "scan" if msg.get("mode") == "scan" else "idle"
+            if self.mode == "scan":
+                self.snapshot = None  # a fresh scan: forget the previous camera result
             self.ack.set()
             print("kiosk mode:", self.mode)
         elif t == "intake":
             try:
-                code = self.save_intake(msg)
+                code, actions = self.save_intake(msg)
             except Exception as e:  # e.g. kiosk_intake.csv open in Excel: tell the kiosk, keep the link
                 print("intake NOT saved:", type(e).__name__, e, msg)
                 self.send_json({"type": "receipt", "ok": False})
                 return
             print("intake saved:", code, msg)
+            self.snapshot = None
             self.send_json({"type": "receipt", "ok": True, "code": code})
-            self.send_json(self.stats_today())
+            if actions.get("buzz"):
+                self.send_json({"type": "actuate", "buzz": actions["buzz"]})
+            self.send_json(self.stats())
         elif t == "pin":
             name = OPERATOR_PINS.get(str(msg.get("pin", "")))
             self.auth = bool(name)
             self.send_json({"type": "auth", "ok": bool(name), "name": name or ""})
         elif t == "recent" and self.auth:
-            self.send_json({"type": "recent", "rows": self.recent()})
+            self.send_json({"type": "recent", "rows": self.recent_rows()})
         elif t == "stats":
-            self.send_json(self.stats_today())
+            self.send_json(self.stats())
         elif t == "lock":
             self.auth = False
+        elif t == "reading" and API_URL and requests:  # HX711 scale: SapulMRF checks scale weights against it
+            try:
+                api("POST", "/devices/readings", json={"kg": float(msg["kg"]), "stable": bool(msg.get("stable"))})
+            except requests.RequestException as e:
+                print("scale reading not sent:", type(e).__name__)
 
     def stream_loop(self):
         period = 1.0 / SEND_FPS
@@ -358,6 +482,11 @@ def main():
     if YOLO is None:
         raise SystemExit("Ultralytics isn't installed: pip install ultralytics")
     bridge = Bridge(args.model, args.cam)
+    if API_URL and requests:
+        print("SapulMRF API:", API_URL, "(key set)" if API_KEY else "(SAPULMRF_KEY missing!)")
+        threading.Thread(target=bridge.outbox_loop, daemon=True).start()
+    else:
+        print("No SAPULMRF_API set: drop-offs are saved to", LOCAL_LOG, "only")
     while True:
         host, port = args.host, args.port
         if not host:

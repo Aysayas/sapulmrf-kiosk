@@ -5,3 +5,4 @@
 .vscode/.browse.c_cpp.db*
 compile_commands.json
 pc_bridge/.venv/
+pc_bridge/outbox/

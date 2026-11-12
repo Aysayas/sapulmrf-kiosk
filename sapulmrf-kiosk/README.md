@@ -34,7 +34,15 @@ python kiosk_bridge.py --model path/to/best.pt --cam 1
 - It reconnects by itself if the kiosk restarts or Wi-Fi drops.
 - Edit `RECYCLABLE` / `BIODEGRADABLE` near the top so they match your model's class names. Everything else counts as Residual.
 - Change `OPERATOR_PINS` (default `1234`).
-- Every drop-off is saved to `kiosk_intake.csv`, which works offline. To also push records to your SapulMRF backend, set `SAPULMRF_API=http://<server>` (and optionally `SAPULMRF_TOKEN`). The bridge POSTs to `/api/intake` and uses the returned `code`. Adjust `save_intake()` if your API differs.
+- **SapulMRF link.** Register the kiosk once in SapulMRF (Settings › IoT devices) as a **weighing station**, e.g. `KIOSK-01`. Copy its key (shown once), then before starting the bridge:
+  ```
+  $env:SAPULMRF_API = "http://127.0.0.1:8001"     # SapulMRF API (this address if it runs on the same laptop)
+  $env:SAPULMRF_KEY = "mrfk_..."                   # the KIOSK-01 key; never commit it
+  ```
+  - Each drop-off goes to `POST /devices/deliveries` with the camera's category, counts, confidence and a snapshot photo. The receipt shows SapulMRF's `D-` code.
+  - Every 5 s the bridge polls `GET /devices/kiosk-state` and passes today's totals, open alerts and the status light to the kiosk. The operator screen's rows come from `GET /devices/kiosk-recent`.
+  - **SapulMRF down:** the drop-off is saved in `outbox/`, the receipt shows a `K-` code, and the bridge retries every 15 s until SapulMRF accepts it, exactly once. Drop-offs SapulMRF refuses for good (e.g. an unknown purok name) are moved to `outbox/rejected/` for the operator.
+  - Without `SAPULMRF_API` the bridge runs offline and only writes `kiosk_intake.csv`. That file is always written either way, as a local log.
 - Windows Firewall: allow Python on **private** networks (it must receive UDP 5001 for auto-find).
 
 ## 2. Kiosk firmware (Arduino IDE)
