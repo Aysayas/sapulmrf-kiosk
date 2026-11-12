@@ -25,7 +25,7 @@ The kiosk broadcasts a beacon every 2 s, so the PC script finds it without typin
 ## 1. PC bridge
 ```
 cd pc_bridge
-pip install ultralytics opencv-python requests
+pip install ultralytics opencv-python requests websockets
 python kiosk_bridge.py --model path/to/best.pt --cam 1
 ```
 - **NVIDIA GPU (recommended):** plain `pip install` gives a CPU-only torch. For YOLO on the GPU, install the CUDA build once:

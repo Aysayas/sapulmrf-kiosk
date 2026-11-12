@@ -24,7 +24,7 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
                      {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
 UDP port 5001: the kiosk broadcasts "SAPULMRF <ip> <port>" every 2 s so this script can find it.
 
-Install:  pip install ultralytics opencv-python requests
+Install:  pip install ultralytics opencv-python requests websockets
 Run:      python kiosk_bridge.py --model best.pt --cam 1             (finds the kiosk by itself)
           python kiosk_bridge.py --model best.pt --cam 1 192.168.1.77  (or give the IP on the kiosk screen)
 """
@@ -52,6 +52,11 @@ except ImportError:
     requests = None
 
 try:
+    from websockets.sync.client import connect as ws_connect
+except ImportError:          # live view on the website is optional
+    ws_connect = None
+
+try:
     from ultralytics import YOLO
 except ImportError:          # lets the network part be tested without YOLO installed
     YOLO = None
@@ -69,6 +74,8 @@ SEND_FPS = 15                    # frames per second sent to the kiosk
 PHOTO_QUALITY = 90               # drop-off photo for SapulMRF: full camera resolution, high quality
 CAPTURE_MODES = [(1920, 1080), (1280, 720), (640, 480)]   # best first; the first the camera delivers wins
 CAM_FPS = 30
+LIVE_QUALITY = 90                # live view on SapulMRF's website: full resolution, high quality
+LIVE_FPS = 30                    # cap; the camera's own rate is usually the limit
 YOLO_IMGSZ = 640
 CONF = 0.45
 STABLE_FRAMES = 12               # same category this many frames in a row = "stable"
@@ -175,6 +182,7 @@ class Bridge:
         self.frame, self.frame_id = None, 0   # newest camera frame, full resolution, clean
         self.boxes = []                       # newest YOLO boxes: (x1, y1, x2, y2, name, conf, bucket)
         self.infer_ms = 0.0
+        self.viewers = 0                      # people watching the live view on SapulMRF
         self.sock = None
         self.send_lock = threading.Lock()
         self.window = threading.BoundedSemaphore(IN_FLIGHT)  # free slots for frames the kiosk hasn't shown yet
@@ -229,15 +237,18 @@ class Bridge:
         seen = 0
         while True:
             frame, fid = self.frame, self.frame_id
-            if self.mode != "scan" or frame is None or fid == seen:
-                if self.mode != "scan":
+            scanning = self.mode == "scan"
+            if (not scanning and self.viewers <= 0) or frame is None or fid == seen:
+                if not scanning:
                     self.history.clear()
                 time.sleep(0.005)
                 continue
             seen = fid
             det, self.boxes = self.infer(frame)
             self.last = det
-            if det["stable"]:
+            if not scanning:
+                self.history.clear()  # only a resident's scan may become "stable", not someone watching online
+            elif det["stable"]:
                 self.snapshot = (det, frame)  # what the camera decided, sent with the drop-off
 
     def annotated(self, frame, boxes):
@@ -324,6 +335,52 @@ class Bridge:
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, body["client_key"] + ".json"), "w") as f:
             json.dump(body, f)
+
+    def live_loop(self):
+        """Full-quality camera for SapulMRF's Live camera page, sent only while someone is watching."""
+        url = API_URL.replace("http", "ws", 1) + "/devices/kiosk-live"
+        wait, down = 2, False
+        while True:
+            try:
+                with ws_connect(url, additional_headers={"X-Device-Key": API_KEY}, open_timeout=5) as ws:
+                    if down:
+                        print("Live view: connected to SapulMRF again")
+                    wait, down = 2, False
+                    closed = threading.Event()
+                    threading.Thread(target=self._live_listen, args=(ws, closed), daemon=True).start()
+                    sent = 0
+                    while not closed.is_set():
+                        frame, fid = self.frame, self.frame_id
+                        if self.viewers <= 0 or frame is None or fid == sent:
+                            time.sleep(0.01)
+                            continue
+                        t0, sent = time.time(), fid
+                        ok, jpg = cv2.imencode(".jpg", self.annotated(frame, self.boxes),
+                                               [cv2.IMWRITE_JPEG_QUALITY, LIVE_QUALITY])
+                        if ok:
+                            ws.send(jpg.tobytes())
+                            ws.send(json.dumps({"det": self.last, "w": frame.shape[1], "h": frame.shape[0]}))
+                        time.sleep(max(0.0, 1 / LIVE_FPS - (time.time() - t0)))
+            except Exception as e:  # SapulMRF down or restarting, or the key is wrong
+                if not down:
+                    print("Live view: can't reach SapulMRF, retrying:", type(e).__name__, e)
+                down = True
+            self.viewers = 0
+            time.sleep(wait)
+            wait = min(wait * 2, 30)
+
+    def _live_listen(self, ws, closed):
+        """SapulMRF says how many people watch; frames are only encoded while that's above 0."""
+        try:
+            for msg in ws:
+                n = json.loads(msg).get("viewers") if isinstance(msg, str) else None
+                if isinstance(n, int) and n != self.viewers:
+                    self.viewers = n
+                    print(f"Live view: {n} watching")
+        except Exception:
+            pass
+        self.viewers = 0
+        closed.set()
 
     def outbox_loop(self):
         """Send drop-offs saved while SapulMRF was down, oldest first, until it accepts or rejects them."""
@@ -567,6 +624,10 @@ def main():
     if API_URL and requests:
         print("SapulMRF API:", API_URL, "(key set)" if API_KEY else "(SAPULMRF_KEY missing!)")
         threading.Thread(target=bridge.outbox_loop, daemon=True).start()
+        if ws_connect:
+            threading.Thread(target=bridge.live_loop, daemon=True).start()
+        else:
+            print("Live view off: pip install websockets")
     else:
         print("No SAPULMRF_API set: drop-offs are saved to", LOCAL_LOG, "only")
     while True:
