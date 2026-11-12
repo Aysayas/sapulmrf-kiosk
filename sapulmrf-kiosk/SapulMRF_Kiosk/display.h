@@ -8,3 +8,4 @@
 bool displayBegin();                 // panel + LVGL display driver; false if the panel can't start
 void displayFill(uint16_t rgb565);   // whole screen one colour, for the boot colour test (before LVGL draws)
 uint32_t displayFlushMs();           // average time of the last swaps, for the stats line
+const uint16_t *displayShown();      // the 800x480 RGB565 frame on screen now (for screenshots)

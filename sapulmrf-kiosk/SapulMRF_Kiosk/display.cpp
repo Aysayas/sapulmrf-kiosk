@@ -11,6 +11,7 @@ static const int W = 800, H = 480;
 static esp_lcd_panel_handle_t panel = nullptr;
 static SemaphoreHandle_t vsyncSem = nullptr;
 static uint16_t *fb[2] = {nullptr, nullptr};
+static uint16_t *shown = nullptr;          // the buffer the panel is scanning out
 static lv_disp_draw_buf_t drawBuf;
 static lv_disp_drv_t drv;
 static uint32_t flushMsAvg = 0;
@@ -32,6 +33,7 @@ static void flush(lv_disp_drv_t *d, const lv_area_t *, lv_color_t *color) {
     xSemaphoreTake(vsyncSem, 0);                                 // forget a VSYNC from before this frame
     esp_lcd_panel_draw_bitmap(panel, 0, 0, W, H, front);         // one of our buffers: the driver just switches
     xSemaphoreTake(vsyncSem, pdMS_TO_TICKS(100));                // the panel now scans `front`
+    shown = front;
     lv_disp_t *disp = _lv_refr_get_disp_refreshing();
     for (int i = 0; i < disp->inv_p; i++) {
       if (disp->inv_area_joined[i]) continue;
@@ -84,6 +86,7 @@ bool displayBegin() {
   esp_lcd_rgb_panel_get_frame_buffer(panel, 2, (void **)&fb[0], (void **)&fb[1]);
   memset(fb[0], 0, W * H * 2);
   memset(fb[1], 0, W * H * 2);
+  shown = fb[0];
 
   lv_disp_draw_buf_init(&drawBuf, fb[0], fb[1], W * H);
   lv_disp_drv_init(&drv);
@@ -101,3 +104,5 @@ void displayFill(uint16_t rgb565) {
 }
 
 uint32_t displayFlushMs() { return flushMsAvg; }
+
+const uint16_t *displayShown() { return shown; }

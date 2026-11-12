@@ -40,6 +40,8 @@ import struct
 import threading
 import time
 import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 from collections import Counter, deque
 from datetime import datetime
 
@@ -86,6 +88,8 @@ LOCAL_LOG = "kiosk_intake.csv"                 # always written, even with a bac
 # its key is shown once in Settings > IoT devices. Leave SAPULMRF_API empty to run offline (CSV only).
 API_URL = os.environ.get("SAPULMRF_API", "").rstrip("/")   # e.g. http://127.0.0.1:8001
 API_KEY = os.environ.get("SAPULMRF_KEY", "")
+SHOTS = "kiosk_shots"         # kiosk screenshots (design review, thesis figures)
+DEV_PORT = 8091              # --dev: localhost-only control for screenshots
 OUTBOX = "outbox"            # drop-offs SapulMRF hasn't accepted yet, one JSON file each
 STATE_EVERY = 5              # seconds between kiosk-state polls
 RETRY_EVERY = 15             # seconds between outbox retries
@@ -188,6 +192,8 @@ class Bridge:
         self.boxes = []                       # newest YOLO boxes: (x1, y1, x2, y2, name, conf, bucket)
         self.infer_ms = 0.0
         self.viewers = 0                      # people watching the live view on SapulMRF
+        self.shot_name, self.shot_label, self.shot_path = "", "", ""
+        self.shot_done = threading.Event()
         self.sock = None
         self.send_lock = threading.Lock()
         self.window = threading.BoundedSemaphore(IN_FLIGHT)  # free slots for frames the kiosk hasn't shown yet
@@ -516,6 +522,8 @@ class Bridge:
                 payload = self.recv_exact(length) if length else b""
                 if kind == b"A":
                     self.free_slot()
+                elif kind == b"S":
+                    self.save_shot(payload)
                 elif kind == b"M":
                     try:
                         self.on_message(json.loads(payload))
@@ -525,6 +533,23 @@ class Bridge:
             if self.alive:
                 print("link error:", e)
         self.alive = False
+
+    def save_shot(self, raw):
+        """The kiosk's screen as it really looks: 800x480 RGB565 little-endian -> PNG."""
+        px = np.frombuffer(raw, "<u2").reshape(480, 800).astype(np.uint16)
+        bgr = np.dstack([((px & 0x1F) << 3), ((px >> 5) & 0x3F) << 2, ((px >> 11) & 0x1F) << 3]).astype(np.uint8)
+        os.makedirs(SHOTS, exist_ok=True)
+        n = len([f for f in os.listdir(SHOTS) if f.endswith(".png")]) + 1
+        name = "-".join(x for x in (f"{n:02d}", self.shot_name or "screen", self.shot_label) if x)
+        self.shot_path = os.path.abspath(os.path.join(SHOTS, name + ".png"))
+        cv2.imwrite(self.shot_path, bgr)
+        print("screenshot saved:", self.shot_path)
+        self.shot_done.set()
+
+    def request_shot(self, label=""):
+        self.shot_label, self.shot_done = label, threading.Event()
+        self.send_json({"type": "snapshot"})
+        return self.shot_path if self.shot_done.wait(10) else None
 
     def free_slot(self):
         try:
@@ -553,6 +578,8 @@ class Bridge:
             if actions.get("buzz"):
                 self.send_json({"type": "actuate", "buzz": actions["buzz"]})
             self.send_json(self.stats())
+        elif t == "shot":
+            self.shot_name = str(msg.get("screen", ""))
         elif t == "pin":
             name = OPERATOR_PINS.get(str(msg.get("pin", "")))
             self.auth = bool(name)
@@ -591,6 +618,46 @@ class Bridge:
             self.fps = 0.8 * self.fps + 0.2 / max(time.time() - t0, 1e-3)
 
 
+def dev_server(bridge):
+    """--dev only, localhost only: /shot?label=x saves a kiosk screenshot, /goto?screen=weigh switches
+    the kiosk's screen (needs DEV_TOOLS 1 in config.h), /send?json={...} passes a message to the kiosk."""
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            try:
+                if not bridge.alive:
+                    raise RuntimeError("kiosk not connected")
+                if u.path == "/shot":
+                    path = bridge.request_shot(q.get("label", ""))
+                    out = {"ok": bool(path), "path": path}
+                elif u.path == "/goto":
+                    bridge.send_json({"type": "goto", "screen": q.get("screen", "")})
+                    time.sleep(0.6)
+                    out = {"ok": True}
+                elif u.path == "/send":
+                    bridge.send_json(json.loads(q["json"]))
+                    time.sleep(0.4)
+                    out = {"ok": True}
+                else:
+                    out = {"ok": False, "error": "use /shot, /goto or /send"}
+            except Exception as e:
+                out = {"ok": False, "error": str(e)}
+            body = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", DEV_PORT), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print(f"Dev control: http://127.0.0.1:{DEV_PORT}/shot  /goto?screen=weigh  /send?json=...")
+
+
 def discover(timeout=6.0):
     """Listen for the kiosk's UDP beacon. Returns (ip, port) or None."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -619,6 +686,7 @@ def main():
     ap.add_argument("--model", default="best.pt", help="your trained YOLO weights")
     ap.add_argument("--cam", type=int, default=0, help="USB camera index (external cam is usually 1)")
     ap.add_argument("--port", type=int, default=STREAM_PORT)
+    ap.add_argument("--dev", action="store_true", help="localhost control for kiosk screenshots (design review)")
     args = ap.parse_args()
 
     if YOLO is None:
@@ -629,6 +697,8 @@ def main():
     bridge.history.clear()
     where = f"GPU {bridge.device}" if bridge.device != "cpu" else "CPU"
     print(f"Camera {args.cam}: {w}x{h} MJPG | YOLO on {where} | warm-up {bridge.infer_ms:.0f} ms")
+    if args.dev:
+        dev_server(bridge)
     threading.Thread(target=bridge.capture_loop, daemon=True).start()
     threading.Thread(target=bridge.infer_loop, daemon=True).start()
     if API_URL and requests:

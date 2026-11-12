@@ -582,6 +582,25 @@ void goTo(lv_obj_t *scr) {
   lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_ON, 150, 0, false);
 }
 
+// ------------------------------------------------------------ screenshots
+static const char *screenName(lv_obj_t *s) {
+  return s == scrHome ? "welcome" : s == scrScan ? "scan" : s == scrWeigh ? "weigh" : s == scrReceipt ? "receipt"
+       : s == scrPin ? "pin" : s == scrOp ? "operator" : "other";
+}
+
+lv_obj_t *screenByName(const char *n) {
+  lv_obj_t *all[] = {scrHome, scrScan, scrWeigh, scrReceipt, scrPin, scrOp};
+  for (lv_obj_t *s : all) if (!strcmp(screenName(s), n)) return s;
+  return nullptr;
+}
+
+// The frame on screen right now, as it really looks: a 'shot' message naming the screen, then the raw
+// 800x480 RGB565 (little-endian) frame as an 'S' packet. The PC saves it as a PNG.
+void sendSnapshot() {
+  JsonDocument d; d["type"] = "shot"; d["screen"] = screenName(lv_scr_act()); wsSend(d);
+  sendPacket('S', (const uint8_t *)displayShown(), 800 * 480 * 2);
+}
+
 // ------------------------------------------------------------ incoming data
 int videoScale = 1;   // 2 = the PC sent a half-size frame (240x180): each pixel becomes a 2x2 block
 
@@ -655,6 +674,13 @@ void onText(uint8_t *data, size_t len) {
       else lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s", title);
       lv_obj_clear_flag(alertBanner, LV_OBJ_FLAG_HIDDEN);
     }
+  } else if (!strcmp(t, "snapshot")) {     // the PC asks for a screenshot (design review, thesis figures)
+    sendSnapshot();
+#if DEV_TOOLS
+  } else if (!strcmp(t, "goto")) {         // dev only: the PC moves the kiosk to a screen for a screenshot
+    lv_obj_t *scr = screenByName(d["screen"] | "");
+    if (scr) goTo(scr);
+#endif
   } else if (!strcmp(t, "actuate")) {
     if (d["light"].is<const char *>()) setLight(d["light"]);
     beep(d["buzz"] | 0);

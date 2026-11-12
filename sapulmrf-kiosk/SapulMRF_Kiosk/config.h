@@ -83,6 +83,7 @@
 #define BACKLIGHT_PCT 80
 #define BACKLIGHT_PWM 1      // 0 = backlight fully on (no dimming), use if the screen stays dark
 #define DISPLAY_TEST  0      // 1 = flash red/green/blue/white at boot to check the panel
+#define DEV_TOOLS     1      // 1 = the PC may switch screens for screenshots (design review); 0 for deployment
 
 // Lower this (e.g. 12000000) if the screen flickers while Wi-Fi is streaming
 #define RGB_PCLK_HZ 14000000
