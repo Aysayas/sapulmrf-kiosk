@@ -15,6 +15,9 @@
 // the kiosk is then always 192.168.4.1.
 #define AP_SSID        "SapulMRF-Kiosk"
 #define AP_PASS        "sapulmrf123"  // at least 8 characters
+// 1 = skip both Wi-Fi tries and start the kiosk's own hotspot at once. Best for the camera video:
+// the laptop joins SapulMRF-Kiosk directly (no phone or router in between), so frames arrive fastest.
+#define FORCE_OWN_HOTSPOT 0
 
 #define STREAM_PORT    5000           // TCP, PC connects here (as in sapul stream)
 #define BEACON_PORT    5001           // UDP "I'm here" so the PC finds the kiosk by itself

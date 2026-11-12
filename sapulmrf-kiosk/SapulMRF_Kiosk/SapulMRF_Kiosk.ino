@@ -583,12 +583,24 @@ void goTo(lv_obj_t *scr) {
 }
 
 // ------------------------------------------------------------ incoming data
+int videoScale = 1;   // 2 = the PC sent a half-size frame (240x180): each pixel becomes a 2x2 block
+
 int jpegDraw(JPEGDRAW *p) {                 // copy decoded block into the frame buffer
   for (int y = 0; y < p->iHeight; y++) {
-    int dy = p->y + y;
-    if (dy >= FRAME_H) break;
-    int w = min(p->iWidth, FRAME_W - p->x);
-    memcpy(&frameBuf[dy * FRAME_W + p->x], &p->pPixels[y * p->iWidth], w * 2);
+    const uint16_t *src = &p->pPixels[y * p->iWidth];
+    if (videoScale == 1) {
+      int dy = p->y + y;
+      if (dy >= FRAME_H) break;
+      int w = min(p->iWidth, FRAME_W - p->x);
+      memcpy(&frameBuf[dy * FRAME_W + p->x], src, w * 2);
+    } else {
+      int dy = (p->y + y) * 2, dx = p->x * 2;
+      if (dy + 1 >= FRAME_H) break;
+      int w = min(p->iWidth, (FRAME_W - dx) / 2);
+      uint16_t *row = &frameBuf[dy * FRAME_W + dx];
+      for (int x = 0; x < w; x++) row[2 * x] = row[2 * x + 1] = src[x];
+      memcpy(row + FRAME_W, row, w * 4);    // the second line is a copy of the first
+    }
   }
   return 1;
 }
@@ -599,6 +611,7 @@ void onFrame(uint8_t *data, size_t len) {
   if (lv_scr_act() != scrScan) return;
   if (jpeg.openRAM(data, len, jpegDraw)) {
     uint32_t t0 = millis();
+    videoScale = jpeg.getWidth() * 2 <= FRAME_W ? 2 : 1;
     jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
     jpeg.decode(0, 0, 0);
     jpeg.close();
@@ -751,8 +764,10 @@ bool tryJoin(const char *ssid, const char *pass) {
 void netStart() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);                   // keeps frame latency low
+#if !FORCE_OWN_HOTSPOT
   if (tryJoin(WIFI1_SSID, WIFI1_PASS)) netName = WIFI1_SSID;
   else if (tryJoin(WIFI2_SSID, WIFI2_PASS)) netName = WIFI2_SSID;
+#endif
 
   if (netName.length()) {
     apMode = false;

@@ -61,8 +61,10 @@ BEACON_PORT = 5001
 HOTSPOT_IP = "192.168.4.1"   # kiosk's own hotspot
 
 # ---------------------------------------------------------------- settings
-FRAME_W, FRAME_H = 480, 360      # matches the video box on the kiosk
-KIOSK_JPEG_QUALITY = 45          # kiosk video: speed over sharpness, the ESP32 decodes every frame
+FRAME_W, FRAME_H = 480, 360      # the video box on the kiosk
+SEND_W, SEND_H = 240, 180        # what the kiosk gets: half size, it doubles each pixel (4x less to decode)
+KIOSK_JPEG_QUALITY = 70          # the frame is tiny, so quality is cheap here
+IN_FLIGHT = 2                    # frames sent before the kiosk's ACK: hides the Wi-Fi round trip
 SEND_FPS = 15                    # frames per second sent to the kiosk
 PHOTO_QUALITY = 90               # drop-off photo for SapulMRF: full camera resolution, high quality
 CAPTURE_MODES = [(1920, 1080), (1280, 720), (640, 480)]   # best first; the first the camera delivers wins
@@ -175,7 +177,7 @@ class Bridge:
         self.infer_ms = 0.0
         self.sock = None
         self.send_lock = threading.Lock()
-        self.ack = threading.Event()
+        self.window = threading.BoundedSemaphore(IN_FLIGHT)  # free slots for frames the kiosk hasn't shown yet
         self.alive = False
         self.mode = "idle"
         self.auth = False
@@ -252,12 +254,12 @@ class Bridge:
         return out
 
     def kiosk_jpeg(self, frame):
-        """Centre-crop to the kiosk's 4:3 box, shrink to 480x360, light JPEG the ESP32 can decode fast."""
+        """Centre-crop to the kiosk's 4:3 box, shrink to SEND_W x SEND_H, light JPEG the ESP32 decodes fast."""
         h, w = frame.shape[:2]
-        cw = min(w, h * FRAME_W // FRAME_H)
-        ch = cw * FRAME_H // FRAME_W
+        cw = min(w, h * SEND_W // SEND_H)
+        ch = cw * SEND_H // SEND_W
         x, y = (w - cw) // 2, (h - ch) // 2
-        small = cv2.resize(frame[y:y + ch, x:x + cw], (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
+        small = cv2.resize(frame[y:y + ch, x:x + cw], (SEND_W, SEND_H), interpolation=cv2.INTER_AREA)
         ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, KIOSK_JPEG_QUALITY])
         return jpg.tobytes() if ok else None
 
@@ -406,7 +408,7 @@ class Bridge:
         self.mode = "idle"
         self.auth = False
         self.alive = True
-        self.ack.set()
+        self.window = threading.BoundedSemaphore(IN_FLIGHT)
         print(f"Connected to kiosk {host}:{port}")
         reader = threading.Thread(target=self.read_loop, daemon=True)
         reader.start()
@@ -446,7 +448,7 @@ class Bridge:
                 kind, length = struct.unpack("<cI", self.recv_exact(5))
                 payload = self.recv_exact(length) if length else b""
                 if kind == b"A":
-                    self.ack.set()
+                    self.free_slot()
                 elif kind == b"M":
                     try:
                         self.on_message(json.loads(payload))
@@ -456,7 +458,12 @@ class Bridge:
             if self.alive:
                 print("link error:", e)
         self.alive = False
-        self.ack.set()
+
+    def free_slot(self):
+        try:
+            self.window.release()
+        except ValueError:  # an ACK for a frame from before a reset: the window is already full
+            pass
 
     def on_message(self, msg):
         t = msg.get("type")
@@ -464,7 +471,7 @@ class Bridge:
             self.mode = "scan" if msg.get("mode") == "scan" else "idle"
             if self.mode == "scan":
                 self.snapshot = None  # a fresh scan: forget the previous camera result
-            self.ack.set()
+            self.window = threading.BoundedSemaphore(IN_FLIGHT)
             print("kiosk mode:", self.mode)
         elif t == "intake":
             try:
@@ -503,15 +510,14 @@ class Bridge:
                 time.sleep(0.05)
                 continue
             t0 = time.time()
-            # wait for the kiosk to show the previous frame (newest-frame-only, no lag build-up)
-            if not self.ack.wait(timeout=2.0):
+            # at most IN_FLIGHT frames on their way: newest-frame-only, no lag build-up
+            if not self.window.acquire(timeout=2.0):
                 print("no ACK from kiosk in 2 s, sending anyway")
             if not self.alive or self.mode != "scan":
                 continue
             jpg = self.kiosk_jpeg(self.annotated(self.frame, self.boxes))
             if jpg is None:
                 continue
-            self.ack.clear()
             self.send_packet(b"J", jpg)
             self.send_json({**self.last, "fps": round(self.fps)})
             time.sleep(max(0.0, period - (time.time() - t0)))
