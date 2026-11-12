@@ -14,7 +14,7 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
   'A'  kiosk -> PC   ACK, frame shown: send the next one (same flow control as the stream)
   'M'  both ways     JSON:
         PC -> kiosk  {"type":"det","recyclable":2,"residual":1,"bio":0,"category":"Mixed household","stable":true,"fps":8}
-                     {"type":"receipt","code":"D-2850"}  {"type":"auth","ok":true}
+                     {"type":"receipt","ok":true,"code":"K-2854"} (ok:false = not saved)  {"type":"auth","ok":true}
                      {"type":"recent","rows":[...]}      {"type":"stats","kg":128.4,"drops":17}
         kiosk -> PC  {"type":"mode","mode":"scan"|"idle"}  {"type":"intake",...}
                      {"type":"pin","pin":"1234"}  {"type":"recent"}  {"type":"stats"}  {"type":"lock"}
@@ -71,6 +71,7 @@ RECYCLABLE = {"bottle", "pet bottle", "plastic bottle", "can", "tin can", "alumi
               "glass bottle", "carton", "cardboard", "paper"}
 BIODEGRADABLE = {"food", "food waste", "leaves", "peel", "organic"}
 # anything else = residual (sachets, wrappers, styro, etc.)
+IGNORED = {"person"}  # the resident's hand/arm is always in view; it must not decide the category
 
 COLORS = {"recyclable": (122, 195, 76), "residual": (58, 163, 242), "bio": (46, 90, 122)}  # BGR
 
@@ -126,6 +127,8 @@ class Bridge:
         counts = Counter()
         for box in res.boxes:
             name = self.model.names[int(box.cls)]
+            if name in IGNORED:
+                continue
             b = bucket(name)
             counts[b] += 1
             x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -178,7 +181,7 @@ class Bridge:
             except Exception as e:  # keep the kiosk working even if the backend is down
                 print("backend error, saving locally:", e)
         if not code:
-            code = f"D-{self.next_code}"
+            code = f"K-{self.next_code}"  # K = made by the kiosk; D- codes come from SapulMRF
         self.next_code = max(self.next_code, int(code.split("-")[1]) + 1)
         new = not os.path.exists(LOCAL_LOG)
         with open(LOCAL_LOG, "a", newline="") as f:
