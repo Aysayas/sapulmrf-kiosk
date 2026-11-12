@@ -21,6 +21,7 @@ enum Str {
   S_BIN, S_COUNTER, S_DONE, S_RETURN,
   S_OP_MODE, S_OP_PIN, S_CLEAR, S_ENTER, S_PIN_4, S_CHECKING, S_WRONG_PIN, S_NO_ANSWER, S_PC_OFF_PIN, S_BACK_DROP,
   S_RECORDS, S_RECORDS_SUB, S_REFRESH, S_LOCK, S_PC_OFF_TABLE,
+  S_PICK_KIND, S_CHANGE, S_NO_ROWS, S_FLOW1, S_FLOW2, S_FLOW3, S_RECORDING_T,
   S_COUNT
 };
 static const char *const WORDS[S_COUNT][2] = {
@@ -29,7 +30,7 @@ static const char *const WORDS[S_COUNT][2] = {
   {"Start", "Simulan"},
   {"Tap to begin", "Pindutin para magsimula"},
   {LV_SYMBOL_SETTINGS "  Staff", LV_SYMBOL_SETTINGS "  Kawani"},
-  {"Today: %s kg from %d drop-offs", "Ngayong araw: %s kg mula sa %d na nagdala"},
+  {"Today: %s kg  ·  %d drop-offs", "Ngayon: %s kg  ·  %d nagdala"},
   {"Waiting for the system...", "Hinihintay ang sistema..."},
   {"Which purok are you from?", "Taga-saang purok ka?"},
   {"Purok", "Purok"},
@@ -68,7 +69,7 @@ static const char *const WORDS[S_COUNT][2] = {
   {"Put it in the %s bin", "Ilagay sa %s na basurahan"},
   {"Leave it at the intake counter", "Iwan sa intake counter"},
   {"Done", "Tapos na"},
-  {"Back to start in %d s", "Babalik sa simula sa %d s"},
+  {"Back to start: %d s", "Pabalik sa simula: %d s"},
   {"STAFF MODE", "PARA SA KAWANI"},
   {"Enter your\n4-digit PIN", "Ilagay ang\n4-digit na PIN"},
   {"Clear", "Burahin"},
@@ -84,6 +85,13 @@ static const char *const WORDS[S_COUNT][2] = {
   {LV_SYMBOL_REFRESH "  Refresh", LV_SYMBOL_REFRESH "  I-refresh"},
   {LV_SYMBOL_CLOSE "  Lock", LV_SYMBOL_CLOSE "  I-lock"},
   {"Camera PC offline", "Offline ang camera PC"},
+  {"Choose the kind  " LV_SYMBOL_RIGHT, "Pumili ng uri  " LV_SYMBOL_RIGHT},
+  {"Change", "Palitan"},
+  {"No drop-offs yet", "Wala pang nagdala"},
+  {"Purok", "Purok"},
+  {"Camera", "Camera"},
+  {"Weight", "Timbang"},
+  {"Recording...", "Itinatala..."},
 };
 static int lang = DEFAULT_LANG;
 static const char *T(Str s) { return WORDS[s][lang]; }
@@ -100,6 +108,7 @@ static const Cat CATS[4] = {
 // ------------------------------------------------------------ state
 static int category = 0;            // index into CATS
 static bool catFromCamera = false;
+static bool catSet = false;        // false = nobody chose yet: Weigh asks for it
 static int purok = 0;               // 0 = not chosen
 static float weightKg = 0;
 static bool weightFromScale = false;
@@ -120,7 +129,7 @@ static lv_obj_t *imgVideo, *lblVideoWait, *lblLive, *frameRing, *gotBar, *lblGot
 static lv_obj_t *lblCount[3];
 static lv_obj_t *chipPurok, *chipCat, *lblWeight, *btnConfirm, *kpWeight;
 static lv_obj_t *rcBand, *rcIcon, *rcTitle, *rcSub, *lblCode, *rcWeight, *rcKind, *rcPurok, *rcBin, *lblBin, *barCountdown, *lblCountdown;
-static lv_obj_t *pinDots[4], *lblPinMsg, *tblRecent;
+static lv_obj_t *pinDots[4], *lblPinMsg, *tblRecent, *lblNoRows, *opAlert, *lblOpAlert, *scanTile[3];
 // status strip (lv_layer_top: survives rebuilding the screens)
 static lv_obj_t *statusDot, *batPill, *lblBat, *langBtn[2];
 static lv_timer_t *receiptTimer = nullptr, *freezeTimer = nullptr;
@@ -285,16 +294,22 @@ static void buildHome() {
   scrHome = screen();
   text(scrHome, T(S_HELLO), &atk_b48, T_INK, T_MARGIN, 84);
   text(scrHome, T(S_HOW), &atk_r24, T_INK2, T_MARGIN, 156, 404);
-  alertBox = box(scrHome, T_MARGIN, 252, 404, 88, T_WARN_BG, 14);
-  lblAlert = text(alertBox, "", &atk_r18, T_WARN, 16, 0, 372);
-  lv_obj_align(lblAlert, LV_ALIGN_LEFT_MID, 16, 0);
-  lv_obj_add_flag(alertBox, LV_OBJ_FLAG_HIDDEN);
+  // How a drop-off goes, in three steps (staff alerts live on the staff screen, not here)
+  const Str steps[3] = {S_FLOW1, S_FLOW2, S_FLOW3};
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *n = box(scrHome, T_MARGIN + i * 140, 262, 40, 40, T_BRAND, LV_RADIUS_CIRCLE);
+    lv_obj_t *num = text(n, "", &atk_b24, 0xFFFFFF);
+    lv_label_set_text_fmt(num, "%d", i + 1);
+    lv_obj_center(num);
+    text(scrHome, T(steps[i]), &atk_r18, T_INK, T_MARGIN + i * 140 + 48, 270);
+  }
+  alertBox = lblAlert = nullptr;
   lblToday = text(scrHome, todayText[0] ? todayText : T(S_TODAY_WAIT), &atk_r24, T_INK, T_MARGIN, 404, 420);
 
   lv_obj_t *start = button(scrHome, "", 476, 76, 292, 300, T_PRIMARY, 0xFFFFFF, &atk_b48, onStart);
   lv_obj_set_style_radius(start, 28, 0);
   lv_obj_t *l = lv_obj_get_child(start, 0);
-  lv_label_set_text(l, T(S_START));
+  lv_label_set_text_fmt(l, "%s  " LV_SYMBOL_RIGHT, T(S_START));
   lv_obj_align(l, LV_ALIGN_CENTER, 0, -18);
   lv_obj_t *sub = text(start, T(S_START_SUB), &atk_r18, 0xDCEFE2);
   lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
@@ -310,11 +325,13 @@ void uiOnStats(float kg, int drops) {
   lv_label_set_text(lblToday, todayText);
 }
 
+// Open alerts are for staff: they show on the staff screen only.
 static void paintAlert() {
-  if (lastAlert.length() == 0) { lv_obj_add_flag(alertBox, LV_OBJ_FLAG_HIDDEN); return; }
-  if (lastAlertMore > 0) lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s  (+%d)", lastAlert.c_str(), lastAlertMore);
-  else lv_label_set_text_fmt(lblAlert, LV_SYMBOL_WARNING "  %s", lastAlert.c_str());
-  lv_obj_clear_flag(alertBox, LV_OBJ_FLAG_HIDDEN);
+  if (!opAlert) return;
+  if (lastAlert.length() == 0) { lv_obj_add_flag(opAlert, LV_OBJ_FLAG_HIDDEN); return; }
+  if (lastAlertMore > 0) lv_label_set_text_fmt(lblOpAlert, LV_SYMBOL_WARNING "  %s  (+%d)", lastAlert.c_str(), lastAlertMore);
+  else lv_label_set_text_fmt(lblOpAlert, LV_SYMBOL_WARNING "  %s", lastAlert.c_str());
+  lv_obj_clear_flag(opAlert, LV_OBJ_FLAG_HIDDEN);
 }
 
 void uiOnAlerts(JsonDocument &d) {
@@ -349,7 +366,7 @@ static void buildPurok() {
 
 // ------------------------------------------------------------ Scan
 static void onScanBack(lv_event_t *) { goTo(scrPurok); }
-static void onChoose(lv_event_t *) { goTo(scrPick); }
+static void onChoose(lv_event_t *) { goTo(scrPick); }   // also cancels the "Got it" auto-advance (goTo stops it)
 static lv_img_dsc_t frameDsc;
 
 static void buildScan() {
@@ -360,15 +377,18 @@ static void buildScan() {
   lv_obj_set_pos(imgVideo, 0, 0);
   lblVideoWait = text(vid, pcUp ? T(S_WAIT_CAM) : T(S_PC_LOST), &atk_r24, 0xC9D3CC);
   lv_obj_center(lblVideoWait);
-  lv_obj_t *live = box(vid, 12, 12, 150, 36, T_ERR, 18);
+  lv_obj_t *live = box(vid, 12, 12, 176, 36, T_ERR, 18);
   lblLive = text(live, T(S_LIVE), &atk_b24, 0xFFFFFF);
   lv_obj_center(lblLive);
   frameRing = box(vid, 0, 0, FRAME_W, FRAME_H, T_VIDEO, 0);   // coloured frame around a stable result
   lv_obj_set_style_bg_opa(frameRing, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(frameRing, 10, 0);
-  gotBar = box(vid, 0, FRAME_H - 72, FRAME_W, 72, T_PRIMARY, 0);
-  lblGot = text(gotBar, "", &atk_b32, 0xFFFFFF);
-  lv_obj_center(lblGot);
+  gotBar = box(vid, 0, FRAME_H - 76, FRAME_W, 76, T_PRIMARY, 0);
+  lblGot = text(gotBar, "", &atk_b32, 0xFFFFFF, 20, 0);
+  lv_obj_align(lblGot, LV_ALIGN_LEFT_MID, 20, 0);
+  lv_obj_t *fix = button(gotBar, T(S_CHANGE), FRAME_W - 150, 10, 136, 56, 0xFFFFFF, T_INK, &atk_b24, onChoose);
+  lv_obj_add_flag(gotBar, LV_OBJ_FLAG_CLICKABLE);
+  (void)fix;
   lv_obj_add_flag(frameRing, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(gotBar, LV_OBJ_FLAG_HIDDEN);
   hintBar = box(vid, 0, FRAME_H - 84, FRAME_W, 84, 0x000000, 0);   // "nothing seen" help, over the video
@@ -379,17 +399,19 @@ static void buildScan() {
   lv_obj_add_flag(hintBar, LV_OBJ_FLAG_HIDDEN);
 
   const int px = 24 + FRAME_W + 24, pw = 800 - px - 24;
-  text(scrScan, T(S_SHOW), &atk_b32, T_INK, px, 68, pw);
-  lblScanStatus = text(scrScan, T(S_LOOKING), &atk_r24, T_INK2, px, 152, pw);
-  barSteady = progress(scrScan, px, 216, pw, 14, T_PRIMARY);
+  text(scrScan, T(S_STEP2), &atk_r18, T_INK2, px, 64);
+  text(scrScan, T(S_SHOW), &atk_b32, T_INK, px, 88, pw);
+  lblScanStatus = text(scrScan, T(S_LOOKING), &atk_r24, T_INK2, px, 170, pw);
+  barSteady = progress(scrScan, px, 238, pw, 14, T_PRIMARY);
   const int order[3] = {1, 3, 2};   // Recyclable, Residual, Biodegradable (det counts: recyclable, residual, bio)
   for (int i = 0; i < 3; i++) {
     const Cat &c = CATS[order[i]];
-    lv_obj_t *t = box(scrScan, px, 246 + i * 52, pw, 44, T_CARD, 12);
+    lv_obj_t *t = scanTile[i] = box(scrScan, px, 262 + i * 46, pw, 40, T_CARD, 12);
     lv_obj_set_style_border_width(t, 2, 0);
     lv_obj_set_style_border_color(t, lv_color_hex(T_LINE), 0);
-    box(t, 0, 0, 10, 44, c.color, 0);
-    text(t, c.name[lang], &atk_r18, T_INK, 22, 10);
+    lv_obj_set_style_opa(t, LV_OPA_50, 0);   // dim until the camera finds something
+    box(t, 0, 0, 10, 40, c.color, 0);
+    text(t, c.name[lang], &atk_r18, T_INK, 22, 8);
     lblCount[i] = text(t, "0", &atk_b24, T_INK);
     lv_obj_align(lblCount[i], LV_ALIGN_RIGHT_MID, -14, 0);
   }
@@ -402,7 +424,10 @@ static void afterFreeze(lv_timer_t *) { freezeTimer = nullptr; goTo(scrWeigh); }
 void uiOnDet(JsonDocument &d) {
   detCounts[0] = d["recyclable"] | 0; detCounts[1] = d["residual"] | 0; detCounts[2] = d["bio"] | 0;
   if (lv_scr_act() != scrScan || frozen) return;
-  for (int i = 0; i < 3; i++) lv_label_set_text_fmt(lblCount[i], "%d", detCounts[i]);
+  for (int i = 0; i < 3; i++) {
+    lv_label_set_text_fmt(lblCount[i], "%d", detCounts[i]);
+    lv_obj_set_style_opa(scanTile[i], detCounts[i] ? LV_OPA_COVER : LV_OPA_50, 0);
+  }
   const char *cat = d["category"] | "Nothing detected";
   int found = -1;
   for (int i = 0; i < 4; i++) if (!strcmp(cat, CATS[i].key)) found = i;
@@ -420,20 +445,21 @@ void uiOnDet(JsonDocument &d) {
     frozen = true;
     category = found;
     catFromCamera = true;
+    catSet = true;
     lv_obj_set_style_border_color(frameRing, lv_color_hex(CATS[found].color), 0);
     lv_obj_set_style_bg_color(gotBar, lv_color_hex(CATS[found].color), 0);
     lv_label_set_text_fmt(lblGot, T(S_GOT_IT), CATS[found].name[lang]);
     lv_obj_add_flag(hintBar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(frameRing, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(gotBar, LV_OBJ_FLAG_HIDDEN);
-    freezeTimer = lv_timer_create(afterFreeze, 1400, nullptr);
+    freezeTimer = lv_timer_create(afterFreeze, 2500, nullptr);   // time to tap Change
     lv_timer_set_repeat_count(freezeTimer, 1);
   }
 }
 
 void uiOnFrameShown(int fps) {
   lv_obj_add_flag(lblVideoWait, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text_fmt(lblLive, LV_SYMBOL_VIDEO "  %d fps", fps);
+  lv_label_set_text_fmt(lblLive, "LIVE  ·  %d fps", fps);
   lv_obj_invalidate(imgVideo);
 }
 
@@ -443,6 +469,7 @@ bool uiWantsVideo() { return lv_scr_act() == scrScan && !frozen; }
 static void onPick(lv_event_t *e) {
   category = (int)(intptr_t)lv_event_get_user_data(e);
   catFromCamera = false;
+  catSet = true;
   goTo(scrWeigh);
 }
 static void onPickBack(lv_event_t *) { goTo(scrWeigh); }
@@ -460,18 +487,31 @@ static void buildPick() {
 
 // ------------------------------------------------------------ Weigh & confirm
 static void refreshWeigh() {
-  lv_label_set_text_fmt(lv_obj_get_child(chipPurok, 0), "%s %d", T(S_PUROK), purok);
-  const Cat &c = CATS[category];
-  lv_label_set_text_fmt(lv_obj_get_child(chipCat, 0), "%s  ·  %s", c.name[lang], catFromCamera ? T(S_FROM_CAMERA) : T(S_YOU_CHOSE));
-  lv_obj_set_style_bg_color(chipCat, lv_color_hex(c.color), 0);
+  lv_label_set_text_fmt(lv_obj_get_child(chipPurok, 0), "%s %d   ·   %s  " LV_SYMBOL_RIGHT, T(S_PUROK), purok, T(S_CHANGE));
+  lv_obj_t *cl = lv_obj_get_child(chipCat, 0);
+  if (catSet) {
+    const Cat &c = CATS[category];
+    lv_label_set_text_fmt(cl, "%s  ·  %s  " LV_SYMBOL_RIGHT, c.name[lang], catFromCamera ? T(S_FROM_CAMERA) : T(S_YOU_CHOSE));
+    lv_obj_set_style_bg_color(chipCat, lv_color_hex(c.color), 0);
+    lv_obj_set_style_text_color(cl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_width(chipCat, 0, 0);
+  } else {                                 // the camera didn't decide and nobody chose: ask, never assume
+    lv_label_set_text(cl, T(S_PICK_KIND));
+    lv_obj_set_style_bg_color(chipCat, lv_color_hex(T_CARD), 0);
+    lv_obj_set_style_text_color(cl, lv_color_hex(T_INK), 0);
+    lv_obj_set_style_border_width(chipCat, 3, 0);
+    lv_obj_set_style_border_color(chipCat, lv_color_hex(T_WARN), 0);
+  }
   char k[16];
+  bool empty = !weightFromScale && !weightEntry.length();
   if (weightFromScale) fmtKg(k, sizeof k, weightKg);
-  else snprintf(k, sizeof k, "%s", weightEntry.length() ? weightEntry.c_str() : "0");
+  else snprintf(k, sizeof k, "%s", empty ? "0.0" : weightEntry.c_str());
   lv_label_set_text(lblWeight, k);
-  bool ok = pcUp && purok > 0 && weightKg > 0.05f;   // without the PC the drop-off would be lost
+  lv_obj_set_style_text_color(lblWeight, lv_color_hex(empty ? T_LINE : T_INK), 0);
+  bool ok = pcUp && purok > 0 && catSet && weightKg > 0.05f;   // without the PC the drop-off would be lost
   if (ok) lv_obj_clear_state(btnConfirm, LV_STATE_DISABLED); else lv_obj_add_state(btnConfirm, LV_STATE_DISABLED);
   lv_obj_set_style_text_color(lv_obj_get_child(btnConfirm, 0), lv_color_hex(ok ? 0xFFFFFF : T_INK2), 0);
-  setButtonText(btnConfirm, !pcUp ? T(S_PC_OFFLINE) : weightKg > 0.05f ? T(S_CONFIRM) : T(S_ENTER_WEIGHT));
+  setButtonText(btnConfirm, !pcUp ? T(S_PC_OFFLINE) : !catSet ? T(S_PICK_KIND) : weightKg > 0.05f ? T(S_CONFIRM) : T(S_ENTER_WEIGHT));
 }
 
 static void onWeightKey(lv_event_t *e) {
@@ -496,14 +536,15 @@ static void buildWeigh() {
   text(scrWeigh, T(S_WEIGHT_Q), &atk_b32, T_INK, T_MARGIN, 68);
   lv_obj_t *step = text(scrWeigh, T(S_STEP3), &atk_r18, T_INK2);
   lv_obj_align(step, LV_ALIGN_TOP_LEFT, T_MARGIN, 112);
-  chipPurok = button(scrWeigh, "", T_MARGIN, 146, 348, 56, T_CARD, T_INK, &atk_b24, onChangePurok, nullptr, T_LINE);
-  chipCat = button(scrWeigh, "", T_MARGIN, 212, 348, 56, T_CAT_MIXED, 0xFFFFFF, &atk_r18, onChoose);
+  chipPurok = button(scrWeigh, "", T_MARGIN, 146, 348, 56, T_CARD, T_INK, &atk_r18, onChangePurok, nullptr, T_LINE);
+  chipCat = button(scrWeigh, "", T_MARGIN, 212, 348, 56, T_CAT_MIXED, 0xFFFFFF, &atk_b24, onChoose);
   lv_obj_t *wl = text(scrWeigh, USE_HX711 ? T(S_FROM_SCALE) : T(S_WEIGHT_KG), &atk_r18, T_INK2, T_MARGIN, 284);
   (void)wl;
   lblWeight = text(scrWeigh, "0", &atk_b72, T_INK, T_MARGIN, 304);
   lv_obj_t *kgl = text(scrWeigh, "kg", &atk_b32, T_INK2);
   lv_obj_align_to(kgl, lblWeight, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -12);
   kpWeight = keypad(scrWeigh, kmap, 404, 68, 372, 324, onWeightKey);
+  lv_obj_set_style_text_font(kpWeight, &atk_b48, LV_PART_ITEMS);   // big digits and a visible decimal point
   button(scrWeigh, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onWeighBack, nullptr, T_LINE);
   btnConfirm = button(scrWeigh, T(S_CONFIRM), 228, 404, 548, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onConfirm);
 #if USE_HX711
@@ -527,9 +568,13 @@ static void paintReceipt() {
   static const char *icon[4] = {LV_SYMBOL_UPLOAD, LV_SYMBOL_OK, LV_SYMBOL_SAVE, LV_SYMBOL_CLOSE};
   lv_obj_set_style_bg_color(rcBand, lv_color_hex(band[rcState]), 0);
   lv_label_set_text(rcIcon, icon[rcState]);
-  lv_label_set_text(rcTitle, rcState == RC_NOT_SAVED ? T(S_NOT_SAVED_T) : rcState == RC_OFFLINE ? T(S_OFFLINE_T) : T(S_THANKS));
-  lv_label_set_text(rcSub, rcState == RC_SENDING ? T(S_SENDING) : rcState == RC_SAVED ? T(S_SAVED)
+  lv_label_set_text(rcTitle, rcState == RC_NOT_SAVED ? T(S_NOT_SAVED_T) : rcState == RC_OFFLINE ? T(S_OFFLINE_T)
+                          : rcState == RC_SENDING ? T(S_RECORDING_T) : T(S_THANKS));
+  lv_label_set_text(rcSub, rcState == RC_SENDING ? "" : rcState == RC_SAVED ? T(S_SAVED)
                          : rcState == RC_OFFLINE ? T(S_OFFLINE) : T(S_NOT_SAVED));
+  bool waiting = rcState == RC_SENDING;     // the countdown starts once the system has answered
+  if (waiting) lv_obj_add_flag(barCountdown, LV_OBJ_FLAG_HIDDEN); else lv_obj_clear_flag(barCountdown, LV_OBJ_FLAG_HIDDEN);
+  if (waiting) lv_obj_add_flag(lblCountdown, LV_OBJ_FLAG_HIDDEN); else lv_obj_clear_flag(lblCountdown, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text(lblCode, rcState == RC_NOT_SAVED ? "-" : rcCode.length() ? rcCode.c_str() : "...");
   char k[24]; fmtKg(k, sizeof k, weightKg); strcat(k, " kg");
   lv_label_set_text(rcWeight, k);
@@ -544,6 +589,7 @@ static void paintReceipt() {
 static void onDone(lv_event_t *) { afterDropOff = true; goTo(scrHome); }
 
 static void receiptTick(lv_timer_t *) {
+  if (rcState == RC_SENDING) return;        // no countdown before the system answers
   if (--receiptCountdown <= 0) { afterDropOff = true; goTo(scrHome); return; }
   lv_label_set_text_fmt(lblCountdown, T(S_RETURN), receiptCountdown);
   lv_bar_set_value(barCountdown, receiptCountdown * 100 / RECEIPT_RETURN_S, LV_ANIM_ON);
@@ -572,8 +618,8 @@ static void buildReceipt() {
   rcBin = box(scrReceipt, 352, 306, 800 - 352 - T_MARGIN, 64, T_CAT_RECYC, 14);
   lblBin = text(rcBin, "", &atk_b24, 0xFFFFFF, 16, 0, 800 - 352 - T_MARGIN - 32);
   lv_obj_align(lblBin, LV_ALIGN_LEFT_MID, 16, 0);
-  barCountdown = progress(scrReceipt, 352, 386, 196, 8, T_INK2);
-  lblCountdown = text(scrReceipt, "", &atk_r18, T_INK2, 352, 404, 196);
+  barCountdown = progress(scrReceipt, 352, 390, 200, 8, T_INK2);
+  lblCountdown = text(scrReceipt, "", &atk_r18, T_INK2, 352, 410, 210);
   button(scrReceipt, T(S_DONE), 568, 392, 800 - 568 - T_MARGIN, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onDone);
 }
 
@@ -595,7 +641,12 @@ void uiOnReceipt(JsonDocument &d) {
   bool saved = d["ok"] | true;            // ok:false = the PC couldn't save it
   rcCode = (const char *)(d["code"] | "");
   rcState = !saved ? RC_NOT_SAVED : rcCode.startsWith("K-") ? RC_OFFLINE : RC_SAVED;
-  if (lv_scr_act() == scrReceipt) paintReceipt();
+  receiptCountdown = RECEIPT_RETURN_S;      // counted from the answer, not from Confirm
+  if (lv_scr_act() == scrReceipt) {
+    paintReceipt();
+    lv_label_set_text_fmt(lblCountdown, T(S_RETURN), receiptCountdown);
+    lv_bar_set_value(barCountdown, 100, LV_ANIM_OFF);
+  }
 }
 
 // ------------------------------------------------------------ Staff PIN
@@ -609,7 +660,7 @@ static void onPinKey(lv_event_t *e) {
   const char *k = lv_btnmatrix_get_btn_text(m, lv_btnmatrix_get_selected_btn(m));
   if (!k) return;
   lv_label_set_text(lblPinMsg, "");
-  if (!strcmp(k, T(S_CLEAR))) pinEntry = "";
+  if (!strcmp(k, LV_SYMBOL_BACKSPACE)) { if (pinEntry.length()) pinEntry.remove(pinEntry.length() - 1); }
   else if (!strcmp(k, T(S_ENTER))) {
     if (pinEntry.length() != 4) lv_label_set_text(lblPinMsg, T(S_PIN_4));
     else if (pcUp) {                       // the PC checks it
@@ -628,8 +679,8 @@ static void onPinKey(lv_event_t *e) {
 
 static void buildPin() {
   static const char *pmap[2][16] = {
-    {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", "Clear", "0", "Enter", ""},
-    {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", "Burahin", "0", "Pasok", ""}};
+    {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", LV_SYMBOL_BACKSPACE, "0", "Enter", ""},
+    {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", LV_SYMBOL_BACKSPACE, "0", "Pasok", ""}};
   scrPin = screen();
   lv_obj_t *side = box(scrPin, 24, 64, 336, 392, T_BRAND, 24);
   text(side, T(S_OP_MODE), &atk_r18, 0xC9DDD0, 28, 28);
@@ -656,9 +707,15 @@ static void buildOperator() {
   text(scrOp, T(S_RECORDS_SUB), &atk_r18, T_INK2, T_MARGIN, 106);
   lblNetLine = text(scrOp, lastNet.c_str(), &atk_r18, T_INK2, 420, 72, 348);
   lblIpLine = text(scrOp, lastIp.c_str(), &atk_r18, T_INK2, 420, 96, 348);
+  opAlert = box(scrOp, T_MARGIN, 134, 800 - 2 * T_MARGIN, 40, T_WARN_BG, 10);
+  lblOpAlert = text(opAlert, "", &atk_r18, T_WARN, 14, 0, 800 - 2 * T_MARGIN - 28);
+  lv_label_set_long_mode(lblOpAlert, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(lblOpAlert, 24);
+  lv_obj_align(lblOpAlert, LV_ALIGN_LEFT_MID, 14, 0);
+  lv_obj_add_flag(opAlert, LV_OBJ_FLAG_HIDDEN);
   tblRecent = lv_table_create(scrOp);
-  lv_obj_set_pos(tblRecent, T_MARGIN, 136);
-  lv_obj_set_size(tblRecent, 800 - 2 * T_MARGIN, 256);
+  lv_obj_set_pos(tblRecent, T_MARGIN, 184);
+  lv_obj_set_size(tblRecent, 800 - 2 * T_MARGIN, 208);
   lv_table_set_col_cnt(tblRecent, 5);
   const int cw[5] = {128, 120, 120, 220, 144};
   const char *hd[5][2] = {{"Code", "Code"}, {"Time", "Oras"}, {"Purok", "Purok"}, {"Kind", "Uri"}, {"Weight", "Timbang"}};
@@ -667,6 +724,8 @@ static void buildOperator() {
   lv_obj_set_style_pad_ver(tblRecent, 8, LV_PART_ITEMS);
   lv_obj_set_style_border_color(tblRecent, lv_color_hex(T_LINE), 0);
   lv_obj_set_style_radius(tblRecent, 14, 0);
+  lblNoRows = text(scrOp, T(S_NO_ROWS), &atk_r24, T_INK2);
+  lv_obj_align_to(lblNoRows, tblRecent, LV_ALIGN_CENTER, 0, 16);
   button(scrOp, T(S_LOCK), T_MARGIN, 404, 220, T_TAP, T_CARD, T_INK, &atk_b24, onOpLock, nullptr, T_LINE);
   button(scrOp, T(S_REFRESH), 800 - T_MARGIN - 220, 404, 220, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b24, onOpRefresh);
 }
@@ -680,6 +739,7 @@ void uiOnAuth(JsonDocument &d) {
 void uiOnRecent(JsonDocument &d) {
   JsonArray rows = d["rows"];
   lv_table_set_row_cnt(tblRecent, rows.size() + 1);
+  if (rows.size()) lv_obj_add_flag(lblNoRows, LV_OBJ_FLAG_HIDDEN); else lv_obj_clear_flag(lblNoRows, LV_OBJ_FLAG_HIDDEN);
   int r = 1;
   for (JsonObject o : rows) {
     lv_table_set_cell_value(tblRecent, r, 0, o["code"] | "");
@@ -715,6 +775,7 @@ void goTo(lv_obj_t *scr) {
   if (cur == scrScan && scr != scrScan) setMode("idle");
   if (scr == scrScan) {
     frozen = false;
+    for (int i = 0; i < 3; i++) lv_obj_set_style_opa(scanTile[i], LV_OPA_50, 0);
     scanSince = lastSeen = millis();
     for (int i = 0; i < 3; i++) { detCounts[i] = 0; lv_label_set_text(lblCount[i], "0"); }
     lv_bar_set_value(barSteady, 0, LV_ANIM_OFF);
@@ -739,7 +800,7 @@ void goTo(lv_obj_t *scr) {
     else lv_timer_resume(receiptTimer);
   } else if (receiptTimer) lv_timer_pause(receiptTimer);
   if (scr == scrHome) {
-    purok = 0; category = 0; catFromCamera = false;
+    purok = 0; category = 0; catFromCamera = false; catSet = false;
     JsonDocument d; d["type"] = "stats"; wsSend(d);
     if (afterDropOff && lang != DEFAULT_LANG) {   // the next resident starts in the default language
       afterDropOff = false;
@@ -750,6 +811,10 @@ void goTo(lv_obj_t *scr) {
     afterDropOff = false;
   }
   if (scr == scrPin) { pinEntry = ""; lv_label_set_text(lblPinMsg, ""); refreshPin(); }
+  if (scr == scrOp) onOpRefresh(nullptr);
+  // The SapulMRF light is for staff; residents never see an unexplained red dot
+  if (scr == scrPin || scr == scrOp) lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
   lv_disp_trig_activity(nullptr);
   lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_ON, 150, 0, false);
 }
@@ -769,6 +834,8 @@ static void buildAll(int show) {
   if (scr == scrWeigh) refreshWeigh();
   if (scr == scrReceipt) paintReceipt();
   if (scr == scrScan) frozen = false;
+  if (scr == scrPin || scr == scrOp) lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
   lv_scr_load(scr);
   for (int i = 0; i < 8; i++) if (old[i]) lv_obj_del(old[i]);
   JsonDocument d; d["type"] = "stats"; wsSend(d);   // today's line again, in the new language
