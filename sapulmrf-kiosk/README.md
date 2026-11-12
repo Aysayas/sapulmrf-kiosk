@@ -28,6 +28,10 @@ cd pc_bridge
 pip install ultralytics opencv-python requests
 python kiosk_bridge.py --model path/to/best.pt --cam 1
 ```
+- **NVIDIA GPU (recommended):** plain `pip install` gives a CPU-only torch. For YOLO on the GPU, install the CUDA build once:
+  `pip install --force-reinstall --no-deps torch torchvision --index-url https://download.pytorch.org/whl/cu130`
+  At start-up the bridge prints the camera mode and `YOLO on GPU 0` or `YOLO on CPU`.
+- **How video flows:** the camera is captured once at its best MJPG mode (up to 1920×1080). YOLO runs on its own thread. The kiosk gets a light 480×360 JPEG at 15 fps (`SEND_FPS`, `KIOSK_JPEG_QUALITY`). The drop-off photo sent to SapulMRF is the clean full-resolution frame at JPEG quality 90.
 - If auto-find doesn't work (some hotspots block broadcasts), add the IP from the kiosk screen:
   `python kiosk_bridge.py --model best.pt --cam 1 192.168.1.77`
 - If the PC is on the kiosk's own hotspot and the beacon isn't heard, the script tries 192.168.4.1 automatically.

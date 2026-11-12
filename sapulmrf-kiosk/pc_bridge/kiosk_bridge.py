@@ -44,6 +44,7 @@ from collections import Counter, deque
 from datetime import datetime
 
 import cv2
+import numpy as np
 
 try:
     import requests
@@ -61,8 +62,12 @@ HOTSPOT_IP = "192.168.4.1"   # kiosk's own hotspot
 
 # ---------------------------------------------------------------- settings
 FRAME_W, FRAME_H = 480, 360      # matches the video box on the kiosk
-JPEG_QUALITY = 55                # lower = faster on the ESP32
-SEND_FPS = 10                    # cap for frames sent to the kiosk
+KIOSK_JPEG_QUALITY = 45          # kiosk video: speed over sharpness, the ESP32 decodes every frame
+SEND_FPS = 15                    # frames per second sent to the kiosk
+PHOTO_QUALITY = 90               # drop-off photo for SapulMRF: full camera resolution, high quality
+CAPTURE_MODES = [(1920, 1080), (1280, 720), (640, 480)]   # best first; the first the camera delivers wins
+CAM_FPS = 30
+YOLO_IMGSZ = 640
 CONF = 0.45
 STABLE_FRAMES = 12               # same category this many frames in a row = "stable"
 OPERATOR_PINS = {"1234": "Operator"}          # change these!
@@ -108,6 +113,31 @@ def category_from(counts: Counter) -> str:
     return "Mixed household"
 
 
+def gpu_device():
+    """CUDA GPU 0 when torch can see one, else the CPU."""
+    try:
+        import torch
+        return 0 if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        return "cpu"
+
+
+def open_camera(index):
+    """Open the camera in MJPG at the best mode in CAPTURE_MODES it really delivers."""
+    backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+    for w, h in CAPTURE_MODES:
+        cap = cv2.VideoCapture(index, backend)
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # without MJPG, HD modes crawl over USB
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+        cap.set(cv2.CAP_PROP_FPS, CAM_FPS)
+        ok, frame = cap.read()
+        if ok and frame.shape[1] == w and frame.shape[0] == h:
+            return cap
+        cap.release()
+    raise SystemExit(f"Camera {index} gives no picture. Try another --cam number.")
+
+
 class Rejected(Exception):
     """SapulMRF refused a drop-off for good (422): sending it again won't help."""
 
@@ -138,11 +168,11 @@ def post_delivery(body):
 class Bridge:
     def __init__(self, model_path, cam_index):
         self.model = YOLO(model_path) if YOLO and model_path else None
-        backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
-        self.cap = cv2.VideoCapture(cam_index, backend) if self.model else None
-        if self.cap is not None:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.device = gpu_device() if self.model else "cpu"
+        self.cap = open_camera(cam_index) if self.model else None
+        self.frame, self.frame_id = None, 0   # newest camera frame, full resolution, clean
+        self.boxes = []                       # newest YOLO boxes: (x1, y1, x2, y2, name, conf, bucket)
+        self.infer_ms = 0.0
         self.sock = None
         self.send_lock = threading.Lock()
         self.ack = threading.Event()
@@ -152,18 +182,26 @@ class Bridge:
         self.history = deque(maxlen=STABLE_FRAMES)
         self.last = {"recyclable": 0, "residual": 0, "bio": 0, "category": "Nothing detected"}
         self.fps = 0.0
-        self.snapshot = None  # (det, jpeg) at the last stable moment of this drop-off
+        self.snapshot = None  # (det, clean full-res frame) at the last stable moment of this drop-off
         self.state = None     # last kiosk-state from SapulMRF
         self.next_code = self._load_next_code()
 
-    # ----- one camera frame -> YOLO -> annotated JPEG + summary
-    def detect_once(self):
-        ok, frame = self.cap.read()
-        if not ok:
-            return None, None
-        res = self.model(frame, conf=CONF, verbose=False)[0]
-        counts = Counter()
-        confs = []
+    # ----- camera -> newest frame (own thread, full resolution)
+    def capture_loop(self):
+        while True:
+            ok, frame = self.cap.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+            self.frame, self.frame_id = frame, self.frame_id + 1
+
+    # ----- newest frame -> YOLO -> boxes + summary (own thread, as fast as the GPU goes)
+    def infer(self, frame):
+        """YOLO on one frame. Returns (det summary, boxes) and updates the stability history."""
+        t0 = time.time()
+        res = self.model(frame, conf=CONF, imgsz=YOLO_IMGSZ, device=self.device, verbose=False)[0]
+        self.infer_ms = 0.8 * self.infer_ms + 0.2 * (time.time() - t0) * 1000
+        counts, confs, boxes = Counter(), [], []
         for box in res.boxes:
             name = self.model.names[int(box.cls)]
             if name in IGNORED:
@@ -171,26 +209,57 @@ class Bridge:
             b = bucket(name)
             counts[b] += 1
             confs.append(float(box.conf))
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-            color = COLORS[b]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
-            label = f"{name} {float(box.conf):.2f}"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 8, y1), color, -1)
-            cv2.putText(frame, label, (x1 + 4, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2)
+            boxes.append((*map(int, box.xyxy[0]), name, float(box.conf), b))
         cat = category_from(counts)
         self.history.append(cat)
-        stable = len(self.history) == STABLE_FRAMES and len(set(self.history)) == 1 and cat != "Nothing detected"
+        same = 0
+        for c in reversed(self.history):
+            if c != cat:
+                break
+            same += 1
+        progress = 0.0 if cat == "Nothing detected" else same / STABLE_FRAMES
         det = {"type": "det", "recyclable": counts["recyclable"], "residual": counts["residual"],
-               "bio": counts["bio"], "category": cat, "stable": stable, "fps": round(self.fps),
-               "conf": round(sum(confs) / len(confs), 2) if confs else None}
-        self.last = det
-        small = cv2.resize(frame, (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
-        ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-        jpg = jpg.tobytes() if ok else None
-        if stable and jpg:
-            self.snapshot = (det, jpg)  # what the camera decided, sent with the drop-off
-        return jpg, det
+               "bio": counts["bio"], "category": cat, "stable": progress >= 1, "progress": round(progress, 2),
+               "fps": round(self.fps), "conf": round(sum(confs) / len(confs), 2) if confs else None}
+        return det, boxes
+
+    def infer_loop(self):
+        seen = 0
+        while True:
+            frame, fid = self.frame, self.frame_id
+            if self.mode != "scan" or frame is None or fid == seen:
+                if self.mode != "scan":
+                    self.history.clear()
+                time.sleep(0.005)
+                continue
+            seen = fid
+            det, self.boxes = self.infer(frame)
+            self.last = det
+            if det["stable"]:
+                self.snapshot = (det, frame)  # what the camera decided, sent with the drop-off
+
+    def annotated(self, frame, boxes):
+        out = frame.copy()
+        k = max(1.0, out.shape[1] / 640)  # line and text size follow the resolution
+        for x1, y1, x2, y2, name, conf, b in boxes:
+            color = COLORS[b]
+            cv2.rectangle(out, (x1, y1), (x2, y2), color, int(3 * k))
+            label = f"{name} {conf:.2f}"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6 * k, int(2 * k))
+            cv2.rectangle(out, (x1, y1 - th - int(8 * k)), (x1 + tw + int(8 * k), y1), color, -1)
+            cv2.putText(out, label, (x1 + int(4 * k), y1 - int(5 * k)), cv2.FONT_HERSHEY_SIMPLEX, 0.6 * k,
+                        (20, 20, 20), int(2 * k))
+        return out
+
+    def kiosk_jpeg(self, frame):
+        """Centre-crop to the kiosk's 4:3 box, shrink to 480x360, light JPEG the ESP32 can decode fast."""
+        h, w = frame.shape[:2]
+        cw = min(w, h * FRAME_W // FRAME_H)
+        ch = cw * FRAME_H // FRAME_W
+        x, y = (w - cw) // 2, (h - ch) // 2
+        small = cv2.resize(frame[y:y + ch, x:x + cw], (FRAME_W, FRAME_H), interpolation=cv2.INTER_AREA)
+        ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, KIOSK_JPEG_QUALITY])
+        return jpg.tobytes() if ok else None
 
     # ----- intake records
     def _load_next_code(self):
@@ -218,10 +287,12 @@ class Bridge:
                 "weight_kg": record["weight_kg"], "weighed_by": "manual" if record["manual"] else "scale",
                 "client_key": str(uuid.uuid4())}  # same key on every retry, so SapulMRF stores it once
         if self.snapshot:
-            det, jpg = self.snapshot
+            det, frame = self.snapshot
             body["cv"] = {"category": det["category"], "confidence": det["conf"],
                           "counts": {k: det[k] for k in ("recyclable", "residual", "bio")}}
-            body["photo"] = base64.b64encode(jpg).decode()
+            ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, PHOTO_QUALITY])
+            if ok:
+                body["photo"] = base64.b64encode(jpg.tobytes()).decode()
         code, actions = None, {}
         if API_URL and requests:
             try:
@@ -425,28 +496,26 @@ class Bridge:
                 print("scale reading not sent:", type(e).__name__)
 
     def stream_loop(self):
+        """Newest frame + newest boxes to the kiosk at SEND_FPS, whatever speed YOLO runs at."""
         period = 1.0 / SEND_FPS
         while self.alive:
-            if self.mode != "scan":
-                self.history.clear()
-                time.sleep(0.1)
-                continue
-            t0 = time.time()
-            jpg, det = self.detect_once()
-            if jpg is None:
+            if self.mode != "scan" or self.frame is None:
                 time.sleep(0.05)
                 continue
+            t0 = time.time()
             # wait for the kiosk to show the previous frame (newest-frame-only, no lag build-up)
             if not self.ack.wait(timeout=2.0):
                 print("no ACK from kiosk in 2 s, sending anyway")
             if not self.alive or self.mode != "scan":
                 continue
+            jpg = self.kiosk_jpeg(self.annotated(self.frame, self.boxes))
+            if jpg is None:
+                continue
             self.ack.clear()
             self.send_packet(b"J", jpg)
-            self.send_json(det)
-            dt = time.time() - t0
-            self.fps = 0.8 * self.fps + 0.2 * (1.0 / max(dt, 1e-3))
-            time.sleep(max(0.0, period - dt))
+            self.send_json({**self.last, "fps": round(self.fps)})
+            time.sleep(max(0.0, period - (time.time() - t0)))
+            self.fps = 0.8 * self.fps + 0.2 / max(time.time() - t0, 1e-3)
 
 
 def discover(timeout=6.0):
@@ -482,6 +551,13 @@ def main():
     if YOLO is None:
         raise SystemExit("Ultralytics isn't installed: pip install ultralytics")
     bridge = Bridge(args.model, args.cam)
+    h, w = bridge.cap.read()[1].shape[:2]
+    bridge.infer(np.zeros((h, w, 3), np.uint8))  # warm-up: the first YOLO call is slow
+    bridge.history.clear()
+    where = f"GPU {bridge.device}" if bridge.device != "cpu" else "CPU"
+    print(f"Camera {args.cam}: {w}x{h} MJPG | YOLO on {where} | warm-up {bridge.infer_ms:.0f} ms")
+    threading.Thread(target=bridge.capture_loop, daemon=True).start()
+    threading.Thread(target=bridge.infer_loop, daemon=True).start()
     if API_URL and requests:
         print("SapulMRF API:", API_URL, "(key set)" if API_KEY else "(SAPULMRF_KEY missing!)")
         threading.Thread(target=bridge.outbox_loop, daemon=True).start()
