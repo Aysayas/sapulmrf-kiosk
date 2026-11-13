@@ -1,5 +1,5 @@
 // The kiosk's screens: Welcome -> Purok -> Scan -> Weigh -> Receipt for residents; for MRF operators, their name ->
-// their own PIN -> operator home (Today, Camera review, Segregation, Sort into storage).
+// their own PIN -> operator home (today's numbers, Segregation, Sort into storage with the camera's guess).
 // English / Tagalog, switchable on every screen; the language goes back to the default after each drop-off.
 #include "ui.h"
 
@@ -22,13 +22,13 @@ enum Str {
   S_BIN, S_COUNTER, S_DONE, S_RETURN,
   S_OP_MODE, S_OP_PIN, S_ENTER, S_PIN_4, S_CHECKING, S_WRONG_PIN, S_NO_ANSWER, S_BACK_DROP, S_LOCK,
   S_PICK_KIND, S_CHANGE, S_FLOW1, S_FLOW2, S_FLOW3, S_RECORDING_T,
-  S_WHO, S_NO_OPS, S_NEED_PC, S_LOADING, S_HI, S_T_TODAY, S_T_REVIEW, S_T_SEG, S_T_SORT,
-  S_DROPS, S_KG_TODAY, S_TO_SEG, S_STORAGE, S_N_OF, S_SURE, S_KEEP, S_NOT_RECYC, S_NO_REVIEW, S_NO_PHOTO,
+  S_WHO, S_NO_OPS, S_NEED_PC, S_LOADING, S_HI, S_T_SEG, S_T_SORT,
+  S_STORAGE, S_NO_PHOTO,
   S_PICK_MAT, S_PICK_AREA, S_WAIT_SEG, S_WAIT_SORT, S_NO_WAITING, S_SEGREGATED, S_MIXED_C, S_WET, S_DRY, S_KG_F, S_BAGS,
-  S_SAVE, S_SAVING, S_SAVED_OK, S_SIGNED_OUT, S_RESIDUAL_M,
+  S_SAVE, S_SAVING, S_SAVED_OK, S_SIGNED_OUT, S_RESIDUAL_M, S_N_WAITING, S_CAM_GUESS, S_AREA_IS, S_TOTAL,
   S_COUNT
 };
-static const char *const WORDS[S_COUNT][2] = {
+static const char *const WORDS[][2] = {
   {"Good day!", "Magandang araw!"},
   {"Open your bag and spread the items on the tray.", "Buksan ang supot at ikalat ang basura sa tray."},
   {"Start", "Simulan"},
@@ -95,19 +95,9 @@ static const char *const WORDS[S_COUNT][2] = {
   {"Staff sign-in needs the camera PC and SapulMRF.", "Kailangan ng camera PC at SapulMRF para makapasok ang kawani."},
   {"Loading...", "Kinukuha..."},
   {"Hi, %s", "Kumusta, %s"},
-  {"Today", "Ngayon"},
-  {"Camera review", "Suriin ang camera"},
   {"Segregation", "Segregasyon"},
   {"Sort into storage", "Ilagay sa imbakan"},
-  {"drop-offs today", "nagdala ngayon"},
-  {"kg today", "kg ngayon"},
-  {"to check", "susuriin"},
   {"Storage", "Imbakan"},
-  {"1 of %d waiting", "1 sa %d naghihintay"},
-  {"%d%% sure", "%d%% sigurado"},
-  {LV_SYMBOL_OK "  Keep", LV_SYMBOL_OK "  Tama"},
-  {"Not recyclable", "Hindi nare-recycle"},
-  {"Nothing to review. Every camera suggestion is checked.", "Wala nang susuriin. Natingnan na lahat ng mungkahi ng camera."},
   {"No photo", "Walang litrato"},
   {"Which material is it?", "Anong materyal ito?"},
   {"Which storage area?", "Saang imbakan?"},
@@ -125,7 +115,12 @@ static const char *const WORDS[S_COUNT][2] = {
   {"Saved", "Na-save"},
   {"You were signed out.", "Na-sign out ka."},
   {"Residual", "Di-nabubulok"},
+  {"%d waiting", "%d naghihintay"},
+  {"%s  ·  camera %d%%", "%s  ·  camera %d%%"},
+  {"Area: %s  " LV_SYMBOL_RIGHT, "Imbakan: %s  " LV_SYMBOL_RIGHT},
+  {"Total %s kg", "Kabuuan %s kg"},
 };
+static_assert(sizeof WORDS / sizeof WORDS[0] == S_COUNT, "every word needs English and Tagalog");
 static int lang = DEFAULT_LANG;
 static const char *T(Str s) { return WORDS[s][lang]; }
 
@@ -156,12 +151,12 @@ static bool afterDropOff = false;      // going home from a receipt resets the l
 
 // screens and the widgets that change
 static lv_obj_t *scrHome, *scrPurok, *scrScan, *scrPick, *scrWeigh, *scrReceipt, *scrPin, *scrOp;
-static lv_obj_t *scrList, *scrToday, *scrReview, *scrSeg, *scrSort;   // staff: chooser, today, camera review, forms
+static lv_obj_t *scrList, *scrSortMat, *scrSeg, *scrSort;   // staff: chooser, material with photo, the two forms
 static lv_obj_t *lblToday, *alertBox, *lblAlert;
 static lv_obj_t *hintBar, *lblHint;
 static lv_obj_t *imgVideo, *lblVideoWait, *lblLive, *frameRing, *gotBar, *lblGot, *lblScanStatus, *barSteady;
 static lv_obj_t *lblCount[3];
-static lv_obj_t *chipPurok, *chipCat, *lblWeight, *btnConfirm, *kpWeight;
+static lv_obj_t *chipPurok, *chipCat, *lblWeight, *lblKg, *btnConfirm, *kpWeight;
 static lv_obj_t *rcBand, *rcIcon, *rcTitle, *rcSub, *lblCode, *rcWeight, *rcKind, *rcPurok, *rcBin, *lblBin, *barCountdown, *lblCountdown;
 static lv_obj_t *pinDots[6], *lblPinMsg, *lblPinName, *opAlert, *lblOpAlert, *scanTile[3];
 // status strip (lv_layer_top: survives rebuilding the screens)
@@ -562,10 +557,13 @@ static void refreshWeigh() {
   else snprintf(k, sizeof k, "%s", empty ? "0.0" : weightEntry.c_str());
   lv_label_set_text(lblWeight, k);
   lv_obj_set_style_text_color(lblWeight, lv_color_hex(empty ? T_LINE : T_INK), 0);
-  bool ok = pcUp && purok > 0 && catSet && weightKg > 0.05f;   // without the PC the drop-off would be lost
+  lv_obj_update_layout(lblWeight);
+  lv_obj_align_to(lblKg, lblWeight, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -12);   // follows the number's width
+  // Without the PC the drop-off would be lost. With a weight but no kind, the button opens the picker.
+  bool ok = pcUp && purok > 0 && weightKg > 0.05f;
   if (ok) lv_obj_clear_state(btnConfirm, LV_STATE_DISABLED); else lv_obj_add_state(btnConfirm, LV_STATE_DISABLED);
   lv_obj_set_style_text_color(lv_obj_get_child(btnConfirm, 0), lv_color_hex(ok ? 0xFFFFFF : T_INK2), 0);
-  setButtonText(btnConfirm, !pcUp ? T(S_PC_OFFLINE) : !catSet ? T(S_PICK_KIND) : weightKg > 0.05f ? T(S_CONFIRM) : T(S_ENTER_WEIGHT));
+  setButtonText(btnConfirm, !pcUp ? T(S_PC_OFFLINE) : weightKg <= 0.05f ? T(S_ENTER_WEIGHT) : catSet ? T(S_CONFIRM) : T(S_PICK_KIND));
 }
 
 static void onWeightKey(lv_event_t *e) {
@@ -595,8 +593,7 @@ static void buildWeigh() {
   lv_obj_t *wl = text(scrWeigh, USE_HX711 ? T(S_FROM_SCALE) : T(S_WEIGHT_KG), &atk_r18, T_INK2, T_MARGIN, 284);
   (void)wl;
   lblWeight = text(scrWeigh, "0", &atk_b72, T_INK, T_MARGIN, 304);
-  lv_obj_t *kgl = text(scrWeigh, "kg", &atk_b32, T_INK2);
-  lv_obj_align_to(kgl, lblWeight, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -12);
+  lblKg = text(scrWeigh, "kg", &atk_b32, T_INK2);
   kpWeight = keypad(scrWeigh, kmap, 404, 68, 372, 324, onWeightKey);
   lv_obj_set_style_text_font(kpWeight, &atk_b48, LV_PART_ITEMS);   // big digits and a visible decimal point
   button(scrWeigh, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onWeighBack, nullptr, T_LINE);
@@ -678,6 +675,7 @@ static void buildReceipt() {
 }
 
 static void onConfirm(lv_event_t *) {
+  if (!catSet) { goTo(scrPick); return; }      // weight typed, kind not chosen yet
   JsonDocument d;
   d["type"] = "intake";
   d["weight"] = weightKg;
@@ -708,15 +706,14 @@ void uiOnReceipt(JsonDocument &d) {
 // operator, so the website's rules, approvals and Activity log apply; the kiosk shows what SapulMRF answers.
 #define MAX_ITEMS 8
 struct Item { int id; String label; };
-static Item ops[MAX_ITEMS], mats[MAX_ITEMS], areas[MAX_ITEMS], waits[MAX_ITEMS];
+struct Wait { int id; String label; float weight, dry; int sugId, pct, guessMat; String guess; };   // a drop-off
+static Item ops[MAX_ITEMS], mats[MAX_ITEMS], areas[MAX_ITEMS];
+static Wait waits[MAX_ITEMS];
 static int nOps = 0, nMats = 0, nAreas = 0, nWaits = 0;
-struct Sugg { int id; String name; int pct; int did; };
-static Sugg sugg[MAX_ITEMS];
-static int nSugg = 0, suggTotal = 0;
 static bool signedIn = false, busy = false;   // busy: a save is on its way, buttons wait for SapulMRF
 static uint32_t busySince = 0;
 static String opName = "";
-enum ListKind { L_NAMES, L_SEG, L_SORT, L_SORT_MAT, L_SORT_AREA, L_REVIEW_MAT };
+enum ListKind { L_NAMES, L_SEG, L_SORT, L_SORT_AREA };
 static ListKind listKind = L_NAMES;
 static int selOp = -1, selWait = -1, selMat = -1, selArea = -1;   // selMat == nMats: residual
 static bool listLoading = false;
@@ -725,7 +722,7 @@ uint16_t *uiPhotoBuf = nullptr;
 static lv_img_dsc_t photoDsc;
 
 static bool isOpScreen(lv_obj_t *s) {
-  return s == scrOp || s == scrToday || s == scrReview || s == scrSeg || s == scrSort || (s == scrList && listKind != L_NAMES);
+  return s == scrOp || s == scrSortMat || s == scrSeg || s == scrSort || (s == scrList && listKind != L_NAMES);
 }
 
 static void opAsk(const char *what) { JsonDocument d; d["type"] = "op"; d["do"] = what; wsSend(d); }
@@ -740,7 +737,19 @@ static void lockNow() {
 static void choose(ListKind k) { listKind = k; goTo(scrList); }
 static void openStaff() { choose(L_NAMES); }
 
-// ---- the chooser: operator names, waiting drop-offs, materials, storage areas
+// The storage area for a material: the first whose name mentions it ("Area A · Plastics" for Plastic), else none.
+static int areaFor(int mat) {
+  String want = mat >= 0 && mat < nMats ? mats[mat].label : String("Residual");
+  want.toLowerCase();
+  for (int i = 0; i < nAreas; i++) {
+    String a = areas[i].label;
+    a.toLowerCase();
+    if (a.indexOf(want) >= 0) return i;
+  }
+  return -1;
+}
+
+// ---- the chooser: operator names, waiting drop-offs, storage areas
 static lv_obj_t *listBox, *lblListTitle, *lblListMsg;
 
 static void onListItem(lv_event_t *e) {
@@ -748,42 +757,29 @@ static void onListItem(lv_event_t *e) {
   switch (listKind) {
     case L_NAMES: selOp = i; goTo(scrPin); break;
     case L_SEG: selWait = i; segCond = -1; goTo(scrSeg); break;
-    case L_SORT: selWait = i; choose(L_SORT_MAT); break;
-    case L_SORT_MAT: selMat = i; choose(L_SORT_AREA); break;
+    case L_SORT: selWait = i; goTo(scrSortMat); break;
     case L_SORT_AREA: selArea = i; goTo(scrSort); break;
-    case L_REVIEW_MAT: {
-      if (busy || !nSugg) return;
-      JsonDocument d; d["type"] = "op"; d["do"] = "confirm"; d["id"] = sugg[0].id; d["material_id"] = mats[i].id;
-      wsSend(d); setBusy(true); goTo(scrReview); break;
-    }
   }
 }
 
 static void onListBack(lv_event_t *) {
   switch (listKind) {
     case L_NAMES: goTo(scrHome); break;
-    case L_SORT_MAT: choose(L_SORT); break;
-    case L_SORT_AREA: choose(L_SORT_MAT); break;
-    case L_REVIEW_MAT: goTo(scrReview); break;
+    case L_SORT_AREA: goTo(scrSort); break;
     default: goTo(scrOp);
   }
 }
 
 static void paintList() {
   lv_obj_clean(listBox);
-  Item *items = listKind == L_NAMES ? ops : (listKind == L_SEG || listKind == L_SORT) ? waits
-              : listKind == L_SORT_AREA ? areas : mats;
-  int n = listKind == L_NAMES ? nOps : (listKind == L_SEG || listKind == L_SORT) ? nWaits
-        : listKind == L_SORT_AREA ? nAreas : nMats;
-  bool residual = listKind == L_SORT_MAT;      // sorting can also store residual, which isn't a material
   bool drops = listKind == L_SEG || listKind == L_SORT;
-  for (int i = 0; i < n + (residual ? 1 : 0); i++) {
-    const char *s = i < n ? items[i].label.c_str() : T(S_RESIDUAL_M);
+  int n = listKind == L_NAMES ? nOps : drops ? nWaits : nAreas;
+  for (int i = 0; i < n; i++) {
+    const char *s = listKind == L_NAMES ? ops[i].label.c_str() : drops ? waits[i].label.c_str() : areas[i].label.c_str();
     button(listBox, s, (i % 2) * 376, (i / 2) * 70, 360, 60, T_CARD, T_INK, drops ? &atk_r18 : &atk_b24, onListItem,
            (void *)(intptr_t)i, T_LINE);
   }
-  bool empty = n == 0 && !residual;
-  if (!empty) lv_obj_add_flag(lblListMsg, LV_OBJ_FLAG_HIDDEN);
+  if (n) lv_obj_add_flag(lblListMsg, LV_OBJ_FLAG_HIDDEN);
   else {
     lv_label_set_text(lblListMsg, listLoading ? T(S_LOADING) : listKind == L_NAMES ? T(S_NO_OPS) : T(S_NO_WAITING));
     lv_obj_clear_flag(lblListMsg, LV_OBJ_FLAG_HIDDEN);
@@ -791,17 +787,17 @@ static void paintList() {
 }
 
 static void enterList() {
-  static const Str titles[] = {S_WHO, S_WAIT_SEG, S_WAIT_SORT, S_PICK_MAT, S_PICK_AREA, S_PICK_MAT};
+  static const Str titles[] = {S_WHO, S_WAIT_SEG, S_WAIT_SORT, S_PICK_AREA};
   lv_label_set_text(lblListTitle, T(titles[listKind]));
   listLoading = true;
-  if (listKind == L_NAMES || listKind == L_SEG || listKind == L_SORT) {
+  if (listKind == L_SORT_AREA) {
+    if (!nAreas) opAsk("areas"); else listLoading = false;
+  } else {
     if (listKind == L_NAMES) nOps = 0; else nWaits = 0;
     if (!pcUp) { listLoading = false; paintList(); lv_label_set_text(lblListMsg, T(S_NEED_PC)); return; }
     if (listKind == L_NAMES) { JsonDocument d; d["type"] = "operators"; wsSend(d); }
     else { JsonDocument d; d["type"] = "op"; d["do"] = "waiting"; d["for"] = listKind == L_SORT ? "sorting" : "segregation"; wsSend(d); }
-  } else if (listKind == L_SORT_AREA ? !nAreas : !nMats) {
-    opAsk(listKind == L_SORT_AREA ? "areas" : "materials");
-  } else listLoading = false;
+  }
   paintList();
 }
 
@@ -880,7 +876,7 @@ void uiOnAuth(JsonDocument &d) {
     signedIn = true;
     opName = (const char *)(d["name"] | "");
     nMats = nAreas = 0;
-    opAsk("materials"); opAsk("areas");       // for camera review and sorting
+    opAsk("materials"); opAsk("areas");       // for sorting
     goTo(scrOp);
     return;
   }
@@ -889,17 +885,11 @@ void uiOnAuth(JsonDocument &d) {
   lv_label_set_text(lblPinMsg, !*err || !strcmp(err, "Wrong PIN.") ? T(S_WRONG_PIN) : err);   // lockout: SapulMRF says how long
 }
 
-// ---- operator home
-static lv_obj_t *lblHi, *lblNetLine, *lblIpLine;
+// ---- operator home: today's numbers and storage on the right, the two tasks with what's waiting on the left
+static lv_obj_t *lblHi, *lblNetLine, *lblIpLine, *lblOpToday, *tileCount[2];
+static lv_obj_t *areaRow[4], *areaName[4], *areaBar[4], *areaPct[4];
 static void onOpLock(lv_event_t *) { goTo(scrHome); }   // goTo signs out when leaving the staff screens
-static void onTile(lv_event_t *e) {
-  switch ((int)(intptr_t)lv_event_get_user_data(e)) {
-    case 0: goTo(scrToday); break;
-    case 1: goTo(scrReview); break;
-    case 2: choose(L_SEG); break;
-    default: choose(L_SORT);
-  }
-}
+static void onTile(lv_event_t *e) { choose((int)(intptr_t)lv_event_get_user_data(e) ? L_SORT : L_SEG); }
 
 static void buildOperator() {
   scrOp = screen();
@@ -912,53 +902,40 @@ static void buildOperator() {
   lv_obj_set_height(lblOpAlert, 24);
   lv_obj_align(lblOpAlert, LV_ALIGN_LEFT_MID, 14, 0);
   lv_obj_add_flag(opAlert, LV_OBJ_FLAG_HIDDEN);
-  const Str tiles[4] = {S_T_TODAY, S_T_REVIEW, S_T_SEG, S_T_SORT};
-  const char *icons[4] = {LV_SYMBOL_LIST, LV_SYMBOL_EYE_OPEN, LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE};
-  for (int i = 0; i < 4; i++) {
-    lv_obj_t *b = button(scrOp, "", T_MARGIN + (i % 2) * 376, 164 + (i / 2) * 112, 360, 100, i ? T_CARD : T_PRIMARY,
-                         i ? T_INK : 0xFFFFFF, &atk_b32, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
-    lv_label_set_text_fmt(lv_obj_get_child(b, 0), "%s  %s", icons[i], T(tiles[i]));
+  const Str tiles[2] = {S_T_SEG, S_T_SORT};
+  const char *icons[2] = {LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE};
+  for (int i = 0; i < 2; i++) {
+    lv_obj_t *b = button(scrOp, "", T_MARGIN, 164 + i * 116, 360, 104, i ? T_CARD : T_PRIMARY, i ? T_INK : 0xFFFFFF,
+                         &atk_b32, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
+    lv_obj_t *l = lv_obj_get_child(b, 0);
+    lv_label_set_text_fmt(l, "%s  %s", icons[i], T(tiles[i]));
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, -16);
+    tileCount[i] = text(b, "", &atk_r24, i ? T_INK2 : 0xDCEFE2);
+    lv_obj_align(tileCount[i], LV_ALIGN_CENTER, 0, 24);
   }
-  button(scrOp, T(S_LOCK), T_MARGIN, 404, 220, T_TAP, T_CARD, T_INK, &atk_b24, onOpLock, nullptr, T_LINE);
-}
-
-// ---- Today: SapulMRF's numbers and how full storage is
-static lv_obj_t *lblStat[3], *areaRow[4], *areaName[4], *areaBar[4], *areaPct[4];
-
-static void onToOp(lv_event_t *) { goTo(scrOp); }
-
-static void buildToday() {
-  scrToday = screen();
-  text(scrToday, T(S_T_TODAY), &atk_b32, T_INK, T_MARGIN, 64);
-  const Str caps[3] = {S_DROPS, S_KG_TODAY, S_TO_SEG};
-  for (int i = 0; i < 3; i++) {
-    lv_obj_t *c = box(scrToday, T_MARGIN + i * 248, 112, 232, 108, T_CARD, 16);
-    lv_obj_set_style_border_width(c, 2, 0);
-    lv_obj_set_style_border_color(c, lv_color_hex(T_LINE), 0);
-    lblStat[i] = text(c, "-", &atk_b48, T_INK, 18, 8);
-    text(c, T(caps[i]), &atk_r18, T_INK2, 18, 70);
-  }
-  text(scrToday, T(S_STORAGE), &atk_b24, T_INK, T_MARGIN, 232);
+  const int px = T_MARGIN + 376, pw = 800 - T_MARGIN - px;
+  lblOpToday = text(scrOp, todayText[0] ? todayText : T(S_LOADING), &atk_r18, T_INK, px, 170, pw);
+  text(scrOp, T(S_STORAGE), &atk_b24, T_INK, px, 206);
   for (int i = 0; i < 4; i++) {
-    areaRow[i] = box(scrToday, T_MARGIN, 268 + i * 32, 800 - 2 * T_MARGIN, 28, T_BG, 0);
-    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 2, 240);
+    areaRow[i] = box(scrOp, px, 244 + i * 34, pw, 28, T_BG, 0);
+    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 2, 150);
     lv_label_set_long_mode(areaName[i], LV_LABEL_LONG_DOT);
     lv_obj_set_height(areaName[i], 24);
-    areaBar[i] = progress(areaRow[i], 256, 8, 380, 12, T_PRIMARY);
+    areaBar[i] = progress(areaRow[i], 160, 8, 120, 12, T_PRIMARY);
     areaPct[i] = text(areaRow[i], "", &atk_b24, T_INK);
     lv_obj_align(areaPct[i], LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN);
   }
-  lblNetLine = text(scrToday, lastNet.c_str(), &atk_r18, T_INK2, 240, 408, 520);
-  lblIpLine = text(scrToday, lastIp.c_str(), &atk_r18, T_INK2, 240, 432, 520);
-  button(scrToday, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onToOp, nullptr, T_LINE);
+  lblNetLine = text(scrOp, lastNet.c_str(), &atk_r18, T_INK2, 272, 408, 496);
+  lblIpLine = text(scrOp, lastIp.c_str(), &atk_r18, T_INK2, 272, 432, 496);
+  button(scrOp, T(S_LOCK), T_MARGIN, 404, 220, T_TAP, T_CARD, T_INK, &atk_b24, onOpLock, nullptr, T_LINE);
 }
 
-static void paintToday(JsonObject o) {
+static void paintHome(JsonObject o) {
   char k[16]; fmtKg(k, sizeof k, o["kg"] | 0.0f);
-  lv_label_set_text_fmt(lblStat[0], "%d", (int)(o["drops"] | 0));
-  lv_label_set_text(lblStat[1], k);
-  lv_label_set_text_fmt(lblStat[2], "%d", (int)(o["segregate"] | 0));
+  lv_label_set_text_fmt(lblOpToday, T(S_TODAY), k, (int)(o["drops"] | 0));
+  lv_label_set_text_fmt(tileCount[0], T(S_N_WAITING), (int)(o["segregate"] | 0));
+  lv_label_set_text_fmt(tileCount[1], T(S_N_WAITING), (int)(o["sort"] | 0));
   JsonArray a = o["areas"];
   for (int i = 0; i < 4; i++) {
     if (i >= (int)a.size()) { lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN); continue; }
@@ -973,43 +950,37 @@ static void paintToday(JsonObject o) {
   }
 }
 
-// ---- Camera review: the photo, what the camera suggested, then Keep / Change / Not recyclable
-static lv_obj_t *photoBox, *imgPhoto, *lblNoPhoto, *lblRevCount, *lblRevName, *lblRevPct, *lblRevEmpty, *revBtn[3];
+// ---- Sort, step 2: the drop-off's photo and the material; the camera's guess is the highlighted button
+static lv_obj_t *imgPhoto, *lblNoPhoto, *lblSortMatTitle, *matBox;
 
-static void sendConfirm(bool notRecyclable) {
-  if (busy || !nSugg) return;
-  JsonDocument d; d["type"] = "op"; d["do"] = "confirm"; d["id"] = sugg[0].id;
-  if (notRecyclable) d["not_recyclable"] = true;
-  wsSend(d); setBusy(true);
+static void onMat(lv_event_t *e) {
+  selMat = (int)(intptr_t)lv_event_get_user_data(e);
+  selArea = areaFor(selMat);                     // usually right; the form lets the operator change it
+  goTo(scrSort);
 }
-static void onKeep(lv_event_t *) { sendConfirm(false); }
-static void onNotRecyclable(lv_event_t *) { sendConfirm(true); }
-static void onReviewChange(lv_event_t *) { if (!busy && nSugg) choose(L_REVIEW_MAT); }
+static void onSortMatBack(lv_event_t *) { choose(L_SORT); }
 
-static void paintReview() {
-  bool any = nSugg > 0;
-  for (int i = 0; i < 3; i++) {
-    if (any) lv_obj_clear_flag(revBtn[i], LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(revBtn[i], LV_OBJ_FLAG_HIDDEN);
-    if (busy) lv_obj_add_state(revBtn[i], LV_STATE_DISABLED); else lv_obj_clear_state(revBtn[i], LV_STATE_DISABLED);
+static void paintSortMat() {
+  lv_obj_clean(matBox);
+  if (selWait < 0 || selWait >= nWaits) return;
+  const Wait &w = waits[selWait];
+  lv_label_set_text(lblSortMatTitle, w.label.c_str());
+  // shortcut: one column fits 4 materials + Residual (SapulMRF has 4); more need two columns
+  for (int i = 0; i <= nMats && i < 5; i++) {   // the materials, then Residual
+    int id = i < nMats ? mats[i].id : 0;
+    bool guess = w.sugId && i < nMats && id == w.guessMat;   // a suggestion is always a material
+    lv_obj_t *b = button(matBox, "", 0, i * 64, 248, 56, guess ? T_PRIMARY : T_CARD,
+                         guess ? 0xFFFFFF : T_INK, &atk_b24, onMat, (void *)(intptr_t)i, guess ? 0 : T_LINE);
+    const char *name = i < nMats ? mats[i].label.c_str() : T(S_RESIDUAL_M);
+    if (guess) lv_label_set_text_fmt(lv_obj_get_child(b, 0), T(S_CAM_GUESS), name, w.pct);
+    else lv_label_set_text(lv_obj_get_child(b, 0), name);
   }
-  setButtonText(revBtn[0], busy ? T(S_SAVING) : T(S_KEEP));
-  if (!any) {
-    lv_label_set_text(lblRevEmpty, listLoading ? T(S_LOADING) : T(S_NO_REVIEW));
-    lv_obj_clear_flag(lblRevEmpty, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(lblRevCount, ""); lv_label_set_text(lblRevName, ""); lv_label_set_text(lblRevPct, "");
-    lv_obj_add_flag(photoBox, LV_OBJ_FLAG_HIDDEN);
-    return;
-  }
-  lv_obj_add_flag(lblRevEmpty, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(photoBox, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text_fmt(lblRevCount, T(S_N_OF), suggTotal);
-  lv_label_set_text(lblRevName, sugg[0].name.c_str());
-  lv_label_set_text_fmt(lblRevPct, T(S_SURE), sugg[0].pct);
 }
 
-static void buildReview() {
-  scrReview = screen();
-  lv_obj_t *ph = photoBox = box(scrReview, 24, 64, PHOTO_W * 3 / 2, PHOTO_H * 3 / 2, T_VIDEO, 12);
+static void buildSortMat() {
+  scrSortMat = screen();
+  lblSortMatTitle = text(scrSortMat, "", &atk_r18, T_INK, T_MARGIN, 64, 480);
+  lv_obj_t *ph = box(scrSortMat, 24, 116, PHOTO_W * 3 / 2, PHOTO_H * 3 / 2, T_VIDEO, 12);
   imgPhoto = lv_img_create(ph);
   lv_img_set_src(imgPhoto, &photoDsc);
   lv_img_set_zoom(imgPhoto, 384);              // 320x180 shown at 1.5x
@@ -1017,44 +988,35 @@ static void buildReview() {
   lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
   lblNoPhoto = text(ph, T(S_LOADING), &atk_r24, 0xC9D3CC);
   lv_obj_center(lblNoPhoto);
-  const int px = 24 + PHOTO_W * 3 / 2 + 24, pw = 800 - px - 24;
-  lblRevCount = text(scrReview, "", &atk_r18, T_INK2, px, 64, pw);
-  lblRevName = text(scrReview, "", &atk_b48, T_INK, px, 86, pw);
-  lblRevPct = text(scrReview, "", &atk_r24, T_INK2, px, 142, pw);
-  revBtn[0] = button(scrReview, T(S_KEEP), px, 184, pw, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b24, onKeep);
-  revBtn[1] = button(scrReview, T(S_CHANGE), px, 258, pw, T_TAP, T_CARD, T_INK, &atk_b24, onReviewChange, nullptr, T_LINE);
-  revBtn[2] = button(scrReview, T(S_NOT_RECYC), px, 332, pw, T_TAP, T_CARD, T_ERR, &atk_b24, onNotRecyclable, nullptr, T_LINE);
-  lblRevEmpty = text(scrReview, "", &atk_b32, T_INK2, T_MARGIN, 140, 800 - 2 * T_MARGIN);
-  button(scrReview, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onToOp, nullptr, T_LINE);
+  const int px = 24 + PHOTO_W * 3 / 2 + 24;
+  text(scrSortMat, T(S_PICK_MAT), &atk_b24, T_INK, px, 64, 800 - px - 24);
+  matBox = box(scrSortMat, px, 100, 800 - px - 24, 5 * 64, T_BG, 0);
+  button(scrSortMat, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onSortMatBack, nullptr, T_LINE);
 }
 
-static void enterReview() {
-  listLoading = true;
-  opAsk("suggestions");
-  paintReview();
+static void enterSortMat() {
+  if (!nMats) opAsk("materials");
+  paintSortMat();
+  lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(lblNoPhoto, T(S_LOADING));
+  lv_obj_clear_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN);
+  if (selWait < 0 || selWait >= nWaits) return;
+  JsonDocument d; d["type"] = "photo"; d["delivery_id"] = waits[selWait].id; wsSend(d);
 }
 
 void uiOnPhoto(int deliveryId, bool ok) {
-  if (lv_scr_act() != scrReview || !nSugg || sugg[0].did != deliveryId) return;   // an older photo: ignore
+  if (lv_scr_act() != scrSortMat || selWait < 0 || waits[selWait].id != deliveryId) return;   // an older photo
   if (ok) { lv_obj_clear_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN); lv_obj_invalidate(imgPhoto); }
   else { lv_label_set_text(lblNoPhoto, T(S_NO_PHOTO)); lv_obj_clear_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN); }
 }
 
-static void askPhoto() {
-  if (!nSugg) return;
-  lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN);
-  if (!sugg[0].did) { lv_label_set_text(lblNoPhoto, T(S_NO_PHOTO)); return; }
-  lv_label_set_text(lblNoPhoto, T(S_LOADING));
-  JsonDocument d; d["type"] = "photo"; d["delivery_id"] = sugg[0].did; wsSend(d);
-}
-
-// ---- Segregation and sorting forms: number fields typed on one keypad
+// ---- Segregation and sorting forms: number fields typed on one keypad, prefilled from what SapulMRF knows
 struct NumField { lv_obj_t *btn; String v; Str label; bool dec; };
 static NumField fWet = {nullptr, "", S_WET, true}, fDry = {nullptr, "", S_DRY, true};
 static NumField fKg = {nullptr, "", S_KG_F, true}, fBags = {nullptr, "", S_BAGS, false};
 static NumField *activeField = nullptr;
-static lv_obj_t *lblSegTitle, *btnCond[2], *btnSegSave, *lblSortTitle, *btnSortSave;
+static bool dryTyped = false;                  // until the operator types Dry, it follows total - wet
+static lv_obj_t *lblSegTitle, *lblSegTotal, *btnCond[2], *btnSegSave, *lblSortTitle, *btnArea, *btnSortSave;
 
 static void paintField(NumField &f) {
   if (!f.btn) return;
@@ -1084,7 +1046,13 @@ static void paintSeg() {
 
 static void paintSort() {
   paintField(fKg); paintField(fBags);
-  paintSave(btnSortSave, fKg.v.toFloat() > 0);
+  lv_obj_t *l = lv_obj_get_child(btnArea, 0);
+  bool has = selArea >= 0 && selArea < nAreas;
+  if (has) lv_label_set_text_fmt(l, T(S_AREA_IS), areas[selArea].label.c_str());
+  else lv_label_set_text(l, T(S_PICK_AREA));
+  lv_obj_set_style_border_width(btnArea, has ? 2 : 3, 0);
+  lv_obj_set_style_border_color(btnArea, lv_color_hex(has ? T_LINE : T_WARN), 0);
+  paintSave(btnSortSave, has && fKg.v.toFloat() > 0);
 }
 
 static void onField(lv_event_t *e) {
@@ -1100,12 +1068,19 @@ static void onFormKey(lv_event_t *e) {
   if (!strcmp(k, LV_SYMBOL_BACKSPACE)) { if (v.length()) v.remove(v.length() - 1); }
   else if (!strcmp(k, ".")) { if (activeField->dec && v.indexOf('.') < 0) v += v.length() ? "." : "0."; }
   else if (v.length() < 6) v += k;
+  if (activeField == &fDry) dryTyped = true;
+  if (activeField == &fWet && !dryTyped && selWait >= 0) {   // dry = what's left of the drop-off
+    float rest = waits[selWait].weight - fWet.v.toFloat();
+    char s[16]; fmtKg(s, sizeof s, rest > 0 ? rest : 0);
+    fDry.v = fWet.v.length() ? s : "";
+  }
   if (lv_scr_act() == scrSeg) paintSeg(); else paintSort();
 }
 
 static void onCond(lv_event_t *e) { segCond = (int)(intptr_t)lv_event_get_user_data(e); paintSeg(); }
 static void onSegBack(lv_event_t *) { choose(L_SEG); }
-static void onSortBack(lv_event_t *) { choose(L_SORT_AREA); }
+static void onSortBack(lv_event_t *) { goTo(scrSortMat); }
+static void onAreaChip(lv_event_t *) { choose(L_SORT_AREA); }
 
 static void onSegSave(lv_event_t *) {
   if (busy || selWait < 0) return;
@@ -1117,9 +1092,11 @@ static void onSegSave(lv_event_t *) {
 
 static void onSortSave(lv_event_t *) {
   if (busy || selWait < 0 || selArea < 0) return;
-  JsonDocument d; d["type"] = "op"; d["do"] = "sort"; d["delivery_id"] = waits[selWait].id;
+  const Wait &w = waits[selWait];
+  JsonDocument d; d["type"] = "op"; d["do"] = "sort"; d["delivery_id"] = w.id;
   if (selMat >= 0 && selMat < nMats) d["material_id"] = mats[selMat].id;   // none = residual
   d["area_id"] = areas[selArea].id; d["kg"] = fKg.v.toFloat(); d["bags"] = fBags.v.toInt();
+  if (w.sugId) { d["suggestion_id"] = w.sugId; d["guess_material_id"] = w.guessMat; }   // the PC answers the camera too
   wsSend(d); setBusy(true); paintSort();
 }
 
@@ -1132,11 +1109,12 @@ static lv_obj_t *fieldButton(lv_obj_t *parent, NumField &f, int y) {
 
 static void buildSeg() {
   scrSeg = screen();
-  lblSegTitle = text(scrSeg, "", &atk_b24, T_INK, T_MARGIN, 66, 356);
-  btnCond[0] = button(scrSeg, T(S_SEGREGATED), T_MARGIN, 112, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCond, (void *)0, T_LINE);
-  btnCond[1] = button(scrSeg, T(S_MIXED_C), T_MARGIN + 184, 112, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCond, (void *)1, T_LINE);
-  fieldButton(scrSeg, fWet, 196);
-  fieldButton(scrSeg, fDry, 270);
+  lblSegTitle = text(scrSeg, "", &atk_r18, T_INK, T_MARGIN, 62, 356);
+  btnCond[0] = button(scrSeg, T(S_SEGREGATED), T_MARGIN, 116, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCond, (void *)0, T_LINE);
+  btnCond[1] = button(scrSeg, T(S_MIXED_C), T_MARGIN + 184, 116, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCond, (void *)1, T_LINE);
+  lblSegTotal = text(scrSeg, "", &atk_b24, T_INK, T_MARGIN, 190);
+  fieldButton(scrSeg, fWet, 228);
+  fieldButton(scrSeg, fDry, 302);
   lv_obj_t *kp = keypad(scrSeg, formKeys, 420, 64, 356, 328, onFormKey);
   lv_obj_set_style_text_font(kp, &atk_b48, LV_PART_ITEMS);
   button(scrSeg, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onSegBack, nullptr, T_LINE);
@@ -1145,9 +1123,10 @@ static void buildSeg() {
 
 static void buildSort() {
   scrSort = screen();
-  lblSortTitle = text(scrSort, "", &atk_b24, T_INK, T_MARGIN, 66, 356);
-  fieldButton(scrSort, fKg, 196);
-  fieldButton(scrSort, fBags, 270);
+  lblSortTitle = text(scrSort, "", &atk_r18, T_INK, T_MARGIN, 62, 356);
+  btnArea = button(scrSort, "", T_MARGIN, 116, 356, T_TAP, T_CARD, T_INK, &atk_b24, onAreaChip, nullptr, T_LINE);
+  fieldButton(scrSort, fKg, 228);
+  fieldButton(scrSort, fBags, 302);
   lv_obj_t *kp = keypad(scrSort, formKeys, 420, 64, 356, 328, onFormKey);
   lv_obj_set_style_text_font(kp, &atk_b48, LV_PART_ITEMS);
   button(scrSort, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onSortBack, nullptr, T_LINE);
@@ -1156,31 +1135,49 @@ static void buildSort() {
 
 static void enterForm(lv_obj_t *scr, lv_obj_t *cur) {
   if (selWait < 0 || selWait >= nWaits) return;
+  const Wait &w = waits[selWait];
+  char k[16];
   if (scr == scrSeg) {
-    if (cur != scrSeg) { fWet.v = fDry.v = ""; activeField = &fWet; }
-    lv_label_set_text(lblSegTitle, waits[selWait].label.c_str());
+    if (cur == scrList) { fWet.v = fDry.v = ""; activeField = &fWet; dryTyped = false; }   // a new drop-off
+    lv_label_set_text(lblSegTitle, w.label.c_str());
+    fmtKg(k, sizeof k, w.weight);
+    lv_label_set_text_fmt(lblSegTotal, T(S_TOTAL), k);
     paintSeg();
   } else {
-    if (cur != scrSort) { fKg.v = fBags.v = ""; activeField = &fKg; }
+    if (cur == scrSortMat) {                     // a new material: kg starts at what's left after segregation
+      fmtKg(k, sizeof k, w.dry > 0 ? w.dry : w.weight);
+      fKg.v = k; fBags.v = ""; activeField = &fBags;
+    }
     const char *mat = selMat >= 0 && selMat < nMats ? mats[selMat].label.c_str() : T(S_RESIDUAL_M);
-    lv_label_set_text_fmt(lblSortTitle, "%s\n%s  " LV_SYMBOL_RIGHT "  %s", waits[selWait].label.c_str(), mat,
-                          selArea >= 0 ? areas[selArea].label.c_str() : "");
+    lv_label_set_text_fmt(lblSortTitle, "%s\n" LV_SYMBOL_RIGHT "  %s", w.label.c_str(), mat);
     paintSort();
   }
 }
 
 // ---- SapulMRF's answers, relayed by the PC
-static void fillItems(Item *items, int &n, JsonArray a, bool drop) {
+static void fillItems(Item *items, int &n, JsonArray a) {
   n = 0;
   for (JsonObject o : a) {
     if (n == MAX_ITEMS) break;
-    items[n].id = o["id"] | 0;
-    if (drop) {                                  // "D-0123 · 3.5 kg" and "Purok 1 · Recyclable"
-      char k[16]; fmtKg(k, sizeof k, o["weight_kg"] | 0.0f);
-      items[n].label = String((const char *)(o["code"] | "")) + "  ·  " + k + " kg\n" + (const char *)(o["source_area"] | "")
-                     + "  ·  " + (const char *)(o["category"] | "");
-    } else items[n].label = (const char *)(o["name"] | "");
-    n++;
+    items[n++] = {o["id"] | 0, String((const char *)(o["name"] | ""))};
+  }
+}
+
+static void fillWaits(JsonArray a) {
+  nWaits = 0;
+  for (JsonObject o : a) {
+    if (nWaits == MAX_ITEMS) break;
+    Wait &w = waits[nWaits++];
+    w.id = o["id"] | 0;
+    w.weight = o["weight_kg"] | 0.0f;
+    w.dry = o["dry_kg"] | 0.0f;
+    w.sugId = o["suggestion_id"] | 0;
+    w.pct = o["pct"] | 0;
+    w.guessMat = o["guess_material_id"] | 0;
+    w.guess = (const char *)(o["guess"] | "");
+    char k[16]; fmtKg(k, sizeof k, w.weight);   // "D-0123 · 3.5 kg" and "Purok 1 · Recyclable"
+    w.label = String((const char *)(o["code"] | "")) + "  ·  " + k + " kg\n" + (const char *)(o["source_area"] | "")
+            + "  ·  " + (const char *)(o["category"] | "");
   }
 }
 
@@ -1188,7 +1185,7 @@ void uiOnOp(JsonDocument &d) {
   const char *what = d["do"] | "";
   bool ok = d["ok"] | false;
   lv_obj_t *cur = lv_scr_act();
-  bool save = !strcmp(what, "confirm") || !strcmp(what, "segregate") || !strcmp(what, "sort");
+  bool save = !strcmp(what, "segregate") || !strcmp(what, "sort");
   if (save) setBusy(false);
   if (d["signed_out"] | false) {                 // the session ended (30 minutes, or locked elsewhere)
     signedIn = false;
@@ -1199,36 +1196,24 @@ void uiOnOp(JsonDocument &d) {
     toast(d["error"] | "SapulMRF error", false);   // SapulMRF's own message, e.g. a full storage area
     listLoading = false;
     if (cur == scrList) paintList();
-    if (cur == scrReview) paintReview();
     if (cur == scrSeg) paintSeg();
     if (cur == scrSort) paintSort();
     return;
   }
   if (save) {
-    toast(T(S_SAVED_OK), true);
-    if (!strcmp(what, "confirm")) { if (cur == scrReview) enterReview(); }
-    else if (!strcmp(what, "segregate")) choose(L_SEG);
-    else choose(L_SORT);
+    const char *note = d["note"] | "";           // the sort saved, but the camera's suggestion wasn't updated
+    if (*note) toast((String(T(S_SAVED_OK)) + ". " + note).c_str(), false); else toast(T(S_SAVED_OK), true);
+    choose(!strcmp(what, "segregate") ? L_SEG : L_SORT);
     return;
   }
-  if (!strcmp(what, "today")) { if (cur == scrToday) paintToday(d["data"].as<JsonObject>()); return; }
-  if (!strcmp(what, "suggestions")) {
-    nSugg = 0;
-    suggTotal = d["data"]["total"] | 0;
-    for (JsonObject o : d["data"]["items"].as<JsonArray>()) {
-      if (nSugg == MAX_ITEMS) break;
-      sugg[nSugg++] = {o["id"] | 0, String((const char *)(o["suggested"] | "")), o["pct"] | 0, o["delivery_id"] | 0};
-    }
-    listLoading = false;
-    if (cur == scrReview) { paintReview(); askPhoto(); }
-    return;
-  }
-  bool drop = !strcmp(what, "waiting");
-  if (drop) fillItems(waits, nWaits, d["data"].as<JsonArray>(), true);
-  else if (!strcmp(what, "materials")) fillItems(mats, nMats, d["data"].as<JsonArray>(), false);
-  else if (!strcmp(what, "areas")) fillItems(areas, nAreas, d["data"].as<JsonArray>(), false);
+  if (!strcmp(what, "today")) { if (cur == scrOp) paintHome(d["data"].as<JsonObject>()); return; }
+  if (!strcmp(what, "waiting")) fillWaits(d["data"].as<JsonArray>());
+  else if (!strcmp(what, "materials")) fillItems(mats, nMats, d["data"].as<JsonArray>());
+  else if (!strcmp(what, "areas")) fillItems(areas, nAreas, d["data"].as<JsonArray>());
   else return;
   if (cur == scrList) { listLoading = false; paintList(); }
+  if (cur == scrSortMat) paintSortMat();
+  if (cur == scrSort && !strcmp(what, "areas")) { if (selArea < 0) selArea = areaFor(selMat); paintSort(); }
 }
 
 void uiSetNet(const char *line, const char *ip) {
@@ -1260,9 +1245,8 @@ static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
     lv_label_set_text(lblPinName, selOp >= 0 ? ops[selOp].label.c_str() : "");
   }
   if (scr == scrList) enterList();
-  if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); }
-  if (scr == scrToday) opAsk("today");
-  if (scr == scrReview) { if (cur == scrList) paintReview(); else enterReview(); }
+  if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); opAsk("today"); }
+  if (scr == scrSortMat) enterSortMat();
   if (scr == scrSeg || scr == scrSort) enterForm(scr, cur);
 }
 
@@ -1319,19 +1303,19 @@ void goTo(lv_obj_t *scr) {
 // Builds (or, after a language switch, rebuilds) every screen and shows the same step again.
 static void buildAll(int show) {
   lv_obj_t *cur = lv_scr_act();
-  lv_obj_t *old[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrToday,
-                     scrReview, scrSeg, scrSort};
+  lv_obj_t *old[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrSortMat,
+                     scrSeg, scrSort};
   const int N = sizeof old / sizeof old[0];
   int at = 0;
   for (int i = 0; i < N; i++) if (old[i] && old[i] == cur) at = i;
   if (show >= 0) at = show;
   for (NumField *f : {&fWet, &fDry, &fKg, &fBags}) f->btn = nullptr;
   buildHome(); buildPurok(); buildScan(); buildPick(); buildWeigh(); buildReceipt(); buildPin(); buildOperator();
-  buildList(); buildToday(); buildReview(); buildSeg(); buildSort();
+  buildList(); buildSortMat(); buildSeg(); buildSort();
   paintAlert();
   paintLang();
-  lv_obj_t *now[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrToday,
-                     scrReview, scrSeg, scrSort};
+  lv_obj_t *now[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrSortMat,
+                     scrSeg, scrSort};
   lv_obj_t *scr = now[at];
   if (scr == scrWeigh) refreshWeigh();
   if (scr == scrReceipt) paintReceipt();
@@ -1370,7 +1354,6 @@ void uiLoop() {
   if (busy && millis() - busySince > 10000) {         // a save SapulMRF never answered
     setBusy(false);
     toast(T(S_NO_ANSWER), false);
-    if (lv_scr_act() == scrReview) paintReview();
     if (lv_scr_act() == scrSeg) paintSeg();
     if (lv_scr_act() == scrSort) paintSort();
   }
@@ -1389,19 +1372,19 @@ const char *uiScreenName() {
   lv_obj_t *s = lv_scr_act();
   return s == scrHome ? "welcome" : s == scrPurok ? "purok" : s == scrScan ? "scan" : s == scrPick ? "pick"
        : s == scrWeigh ? "weigh" : s == scrReceipt ? "receipt" : s == scrPin ? "pin" : s == scrOp ? "operator"
-       : s == scrList ? "list" : s == scrToday ? "today" : s == scrReview ? "review" : s == scrSeg ? "segregate"
+       : s == scrList ? "list" : s == scrSortMat ? "material" : s == scrSeg ? "segregate"
        : s == scrSort ? "sort" : "other";
 }
 
 bool uiGoto(const char *n) {
   // Staff screens need a real sign-in: without one the PC refuses their data and the kiosk goes home.
-  lv_obj_t *all[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrToday, scrReview};
-  const char *names[] = {"welcome", "purok", "scan", "pick", "weigh", "receipt", "pin", "operator", "today", "review"};
+  lv_obj_t *all[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp};
+  const char *names[] = {"welcome", "purok", "scan", "pick", "weigh", "receipt", "pin", "operator"};
   if (!strcmp(n, "en") || !strcmp(n, "tl")) { lang = !strcmp(n, "tl"); buildAll(); return true; }
   if (!strcmp(n, "who")) { choose(L_NAMES); return true; }
   if (!strcmp(n, "seglist")) { choose(L_SEG); return true; }
   if (!strcmp(n, "sortlist")) { choose(L_SORT); return true; }
-  for (int i = 0; i < 10; i++) if (!strcmp(n, names[i])) {
+  for (int i = 0; i < 8; i++) if (!strcmp(n, names[i])) {
     if (all[i] == scrWeigh && !purok) purok = 3;    // a believable screen for review shots
     goTo(all[i]);
     return true;

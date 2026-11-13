@@ -24,7 +24,8 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
                      {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
         operator mode (an MRF operator signed in with their own SapulMRF kiosk PIN):
         kiosk -> PC  {"type":"operators"}  {"type":"pin","user_id":3,"pin":"2468"}  {"type":"lock"}
-                     {"type":"op","do":"today"|"suggestions"|"waiting"|"materials"|"areas"|"confirm"|"segregate"|"sort",...}
+                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort",...}  (a sort may carry
+                      the camera's suggestion_id + guess_material_id: the bridge then confirms or corrects that suggestion)
                      {"type":"photo","delivery_id":12}
         PC -> kiosk  {"type":"operators","items":[{"id":3,"name":"Juan"}]}  {"type":"auth","ok":true,"name":"Juan"}
                      {"type":"op","do":...,"ok":true,"data":...} or {"ok":false,"error":"SapulMRF's message"}
@@ -104,28 +105,32 @@ COOKIE = "sapulmrf_session"  # an operator's SapulMRF session, from their kiosk 
 PHOTO_W, PHOTO_H = 320, 180  # camera-review photo on the kiosk
 LIST_MAX = 8                 # rows per list sent to the kiosk: what its screen and JSON buffer hold
 
-# Map YOUR model's class names to the three kiosk buckets (lower-case).
+# Map YOUR model's class names to the three kiosk buckets (lower-case). A class in none of them is ignored, so the
+# room behind the tray (chairs, a TV, people) never decides the category; start-up lists the ignored classes.
+# The stock YOLO model's waste-like classes are included until a waste-trained model replaces it.
 RECYCLABLE = {"bottle", "pet bottle", "plastic bottle", "can", "tin can", "aluminum can",
-              "glass bottle", "carton", "cardboard", "paper"}
-BIODEGRADABLE = {"food", "food waste", "leaves", "peel", "organic"}
-# anything else = residual (sachets, wrappers, styro, etc.)
+              "glass bottle", "carton", "cardboard", "paper", "cup", "wine glass", "book"}
+BIODEGRADABLE = {"food", "food waste", "leaves", "peel", "organic",
+                 "banana", "apple", "orange", "broccoli", "carrot", "sandwich", "hot dog", "pizza", "donut", "cake"}
+RESIDUAL = {"sachet", "wrapper", "candy wrapper", "styro", "styrofoam", "plastic bag", "diaper", "tissue", "straw"}
 # The kiosk camera is also the sorting camera: these classes become material suggestions in SapulMRF
 # (its materials: Plastic, Paper, Cardboard, Metal). Classes not listed send no suggestion.
 MATERIALS = {"bottle": "Plastic", "pet bottle": "Plastic", "plastic bottle": "Plastic",
              "can": "Metal", "tin can": "Metal", "aluminum can": "Metal",
-             "paper": "Paper", "cardboard": "Cardboard", "carton": "Cardboard"}
+             "paper": "Paper", "cardboard": "Cardboard", "carton": "Cardboard", "cup": "Plastic", "book": "Paper"}
 IGNORED = {"person"}  # the resident's hand/arm is always in view; it must not decide the category
 
 COLORS = {"recyclable": (122, 195, 76), "residual": (58, 163, 242), "bio": (46, 90, 122)}  # BGR
 
 
-def bucket(name: str) -> str:
+def bucket(name: str):
+    """recyclable / bio / residual, or None for a class that isn't waste (ignored)."""
     n = name.lower()
     if n in RECYCLABLE:
         return "recyclable"
     if n in BIODEGRADABLE:
         return "bio"
-    return "residual"
+    return "residual" if n in RESIDUAL else None
 
 
 def category_from(counts: Counter) -> str:
@@ -218,21 +223,14 @@ def op_request(do, m):
         return "GET", "/overview", None, lambda o: {
             "drops": o["today_deliveries"], "kg": o["today_kg"], "segregate": o["awaiting_segregation"],
             "areas": [{"name": a["name"], "pct": a["pct"]} for a in o["areas"][:LIST_MAX]]}
-    if do == "suggestions":
-        return "GET", "/classifications/pending", None, lambda items: {"total": len(items), "items": [
-            {"id": c["id"], "suggested": c["suggested"], "pct": round(c["confidence"] * 100),
-             "delivery_id": photo_id(c["image_url"])} for c in items[:LIST_MAX]]}
     if do == "waiting":
         waiting = "sorting" if m.get("for") == "sorting" else "segregation"
-        return "GET", f"/operations/intake?waiting={waiting}&limit={LIST_MAX}", None, \
-            lambda items: _rows(items, ("id", "code", "source_area", "category", "weight_kg"))
+        return "GET", f"/operations/intake?waiting={waiting}&limit={LIST_MAX}", None, lambda items: [
+            {**{k: i[k] for k in ("id", "code", "source_area", "category", "weight_kg")},
+             "dry_kg": (i.get("segregation") or {}).get("dry_kg", 0)} for i in items[:LIST_MAX]]
     if do in ("materials", "areas"):
         kind = "materials" if do == "materials" else "storage-areas"
         return "GET", f"/masterdata/{kind}?active=true", None, lambda items: _rows(items, ("id", "name"))
-    if do == "confirm":
-        body = {"not_recyclable": True} if m.get("not_recyclable") else \
-            {"final_material_id": int(m["material_id"])} if m.get("material_id") else {}
-        return "POST", f"/classifications/{int(m['id'])}/confirm", body, None
     if do == "segregate":
         return "POST", f"/deliveries/{int(m['delivery_id'])}/segregation", {
             "condition": "mixed" if m.get("condition") == "mixed" else "segregated",
@@ -242,6 +240,25 @@ def op_request(do, m):
             "material_id": int(m["material_id"]) if m.get("material_id") else None,  # none = residual
             "storage_area_id": int(m["area_id"]), "kg": float(m["kg"]), "bags": int(m.get("bags") or 0)}]}, None
     raise ValueError(f"unknown operator task {do!r}")
+
+
+def confirm_body(guess_material_id, material_id):
+    """Sorting answers the camera's suggestion: same material = keep it, another = correct it, residual = not recyclable."""
+    if not material_id:
+        return {"not_recyclable": True}
+    return {} if material_id == guess_material_id else {"final_material_id": material_id}
+
+
+def best_guesses(pending, materials):
+    """delivery id -> its top pending camera suggestion, with the suggested material's id for the kiosk."""
+    ids = {x["name"].lower(): x["id"] for x in materials}
+    out = {}
+    for c in pending:
+        did = photo_id(c["image_url"])
+        if did and (did not in out or c["confidence"] > out[did]["conf"]):
+            out[did] = {"suggestion_id": c["id"], "guess": c["suggested"], "conf": c["confidence"],
+                        "guess_material_id": ids.get(c["suggested"].lower())}
+    return out
 
 
 def fit_jpeg(jpeg, w, h, quality=80):
@@ -294,9 +311,9 @@ class Bridge:
         counts, confs, boxes = Counter(), [], []
         for box in res.boxes:
             name = self.model.names[int(box.cls)]
-            if name in IGNORED:
+            b = None if name in IGNORED else bucket(name)
+            if b is None:
                 continue
-            b = bucket(name)
             counts[b] += 1
             confs.append(float(box.conf))
             boxes.append((*map(int, box.xyxy[0]), name, float(box.conf), b))
@@ -735,9 +752,40 @@ class Bridge:
             reply.update(error=error, signed_out=self.token is None)
         elif shape:
             reply["data"] = shape(r.json())
+            if do == "today":
+                reply["data"]["sort"] = self.count_waiting("sorting")
+            elif do == "waiting" and msg.get("for") == "sorting":
+                self.add_guesses(reply["data"])
+        if do == "sort" and r is not None and msg.get("suggestion_id"):
+            reply["note"] = self.answer_suggestion(msg)
         if method == "POST":
-            print("operator", do, "->", "saved" if r is not None else error)
+            print("operator", do, "->", "saved" if r is not None else error, reply.get("note") or "")
         self.send_json(reply)
+
+    def count_waiting(self, what):
+        # shortcut: counts at most 200 waiting drop-offs; SapulMRF has no count route yet
+        r, _ = self.as_operator("GET", f"/operations/intake?waiting={what}&limit=200")
+        return len(r.json()) if r is not None else 0
+
+    def add_guesses(self, rows):
+        """Each drop-off waiting to be sorted gets the camera's suggestion, if it made one."""
+        pending, _ = self.as_operator("GET", "/classifications/pending")
+        mats, _ = self.as_operator("GET", "/masterdata/materials?active=true")
+        guesses = best_guesses(pending.json(), mats.json()) if pending is not None and mats is not None else {}
+        for row in rows:
+            g = guesses.get(row["id"])
+            if g:
+                row.update(suggestion_id=g["suggestion_id"], guess=g["guess"], pct=round(g["conf"] * 100),
+                           guess_material_id=g["guess_material_id"])
+
+    def answer_suggestion(self, msg):
+        """After a sort, confirm or correct the camera's suggestion, so SapulMRF keeps its accuracy record.
+        The sort is already saved; a failure here is only reported."""
+        mid = int(msg["material_id"]) if msg.get("material_id") else None
+        gid = int(msg["guess_material_id"]) if msg.get("guess_material_id") else None
+        r, error = self.as_operator("POST", f"/classifications/{int(msg['suggestion_id'])}/confirm",
+                                    confirm_body(gid, mid))
+        return None if r is not None else f"camera suggestion not updated: {error}"
 
     def send_photo(self, msg):
         try:
@@ -850,6 +898,10 @@ def main():
     bridge.history.clear()
     where = f"GPU {bridge.device}" if bridge.device != "cpu" else "CPU"
     print(f"Camera {args.cam}: {w}x{h} MJPG | YOLO on {where} | warm-up {bridge.infer_ms:.0f} ms")
+    skipped = [n for n in bridge.model.names.values() if bucket(n) is None]
+    if skipped:
+        print(f"Not waste, ignored ({len(skipped)} of {len(bridge.model.names)} classes):", ", ".join(skipped[:12]),
+              "..." if len(skipped) > 12 else "")
     if args.dev:
         dev_server(bridge)
     threading.Thread(target=bridge.capture_loop, daemon=True).start()

@@ -36,7 +36,7 @@ python kiosk_bridge.py --model path/to/best.pt --cam 1
   `python kiosk_bridge.py --model best.pt --cam 1 192.168.1.77`
 - If the PC is on the kiosk's own hotspot and the beacon isn't heard, the script tries 192.168.4.1 automatically.
 - It reconnects by itself if the kiosk restarts or Wi-Fi drops.
-- Edit `RECYCLABLE` / `BIODEGRADABLE` near the top so they match your model's class names. Everything else counts as Residual.
+- Edit `RECYCLABLE` / `BIODEGRADABLE` / `RESIDUAL` near the top so they match your model's class names. A class in none of them is **ignored**, so the room behind the tray (chairs, a TV) never decides the category. At start-up the bridge lists the ignored classes.
 - **SapulMRF link.** Register the kiosk once in SapulMRF (Settings › IoT devices) as a **weighing station**, e.g. `KIOSK-01`. Copy its key (shown once), then before starting the bridge:
   ```
   $env:SAPULMRF_API = "http://127.0.0.1:8001"     # SapulMRF API (this address if it runs on the same laptop)
@@ -47,7 +47,9 @@ python kiosk_bridge.py --model path/to/best.pt --cam 1
   - **SapulMRF down:** the drop-off is saved in `outbox/`, the receipt shows a `K-` code, and the bridge retries every 15 s until SapulMRF accepts it, exactly once. Drop-offs SapulMRF refuses for good (e.g. an unknown purok name) are moved to `outbox/rejected/` for the operator.
   - Without `SAPULMRF_API` the bridge runs offline and only writes `kiosk_intake.csv`. That file is always written either way, as a local log.
   - **Operator mode:** each MRF operator sets a kiosk PIN on the SapulMRF website (Profile › Kiosk PIN). On the kiosk: **Staff**, tap your name, type your PIN.
-    - **Home:** Today, Camera review (the drop-off photo and the camera's suggestion: Keep, Change or Not recyclable), Segregation, Sort into storage.
+    - **Home:** today's drop-offs and kg, how full each storage area is, and two tasks with what's waiting: **Segregation** and **Sort into storage**.
+    - **Sorting answers the camera too:** the material step shows the drop-off's photo with the camera's guess highlighted ("Plastic · camera 86%"). Kg starts at the dry weight from the segregation check, and the area whose name mentions the material is preselected. Saving also confirms or corrects the camera's suggestion in SapulMRF.
+    - **Segregation:** type the wet kg; dry fills in as total − wet until you type it yourself.
     - **How saving works:** the bridge holds that operator's SapulMRF session (memory only, 30 minutes at most) and makes each save through SapulMRF's own operator routes. The kiosk shows SapulMRF's answer, e.g. a full storage area.
     - **Signing out:** Lock, or 5 minutes idle, signs out. 5 wrong PINs lock that operator for 5 minutes. Without SapulMRF there is no operator mode.
 - Windows Firewall: allow Python on **private** networks (it must receive UDP 5001 for auto-find).
