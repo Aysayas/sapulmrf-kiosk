@@ -917,11 +917,11 @@ static void buildOperator() {
   lblOpToday = text(scrOp, todayText[0] ? todayText : T(S_LOADING), &atk_r18, T_INK, px, 170, pw);
   text(scrOp, T(S_STORAGE), &atk_b24, T_INK, px, 206);
   for (int i = 0; i < 4; i++) {
-    areaRow[i] = box(scrOp, px, 244 + i * 34, pw, 28, T_BG, 0);
-    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 2, 150);
+    areaRow[i] = box(scrOp, px, 240 + i * 40, pw, 38, T_BG, 0);   // name on top, a thin bar under it: the full name fits
+    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 0, pw - 76);
     lv_label_set_long_mode(areaName[i], LV_LABEL_LONG_DOT);
     lv_obj_set_height(areaName[i], 24);
-    areaBar[i] = progress(areaRow[i], 160, 8, 120, 12, T_PRIMARY);
+    areaBar[i] = progress(areaRow[i], 0, 28, pw - 76, 6, T_PRIMARY);
     areaPct[i] = text(areaRow[i], "", &atk_b24, T_INK);
     lv_obj_align(areaPct[i], LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN);
@@ -1124,7 +1124,8 @@ static void buildSeg() {
 static void buildSort() {
   scrSort = screen();
   lblSortTitle = text(scrSort, "", &atk_r18, T_INK, T_MARGIN, 62, 356);
-  btnArea = button(scrSort, "", T_MARGIN, 116, 356, T_TAP, T_CARD, T_INK, &atk_b24, onAreaChip, nullptr, T_LINE);
+  // below the 3-line title (drop-off, purok, material); r18 so "Area: Demo Area A · Plastics ›" stays on one line
+  btnArea = button(scrSort, "", T_MARGIN, 140, 356, T_TAP, T_CARD, T_INK, &atk_r18, onAreaChip, nullptr, T_LINE);
   fieldButton(scrSort, fKg, 228);
   fieldButton(scrSort, fBags, 302);
   lv_obj_t *kp = keypad(scrSort, formKeys, 420, 64, 356, 328, onFormKey);
