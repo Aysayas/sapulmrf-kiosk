@@ -41,6 +41,7 @@ import argparse
 import base64
 import csv
 import glob
+import hashlib
 import json
 import os
 import re
@@ -53,6 +54,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from collections import Counter, deque
 from datetime import datetime
+from pathlib import Path
+from statistics import median
 
 import cv2
 import numpy as np
@@ -89,7 +92,11 @@ LIVE_QUALITY = 90                # live view on SapulMRF's website: full resolut
 LIVE_FPS = 30                    # cap; the camera's own rate is usually the limit
 YOLO_IMGSZ = 640
 CONF = 0.45
-STABLE_FRAMES = 12               # same category this many frames in a row = "stable"
+CLASS_CONF = {}                  # per-class minimum confidence, e.g. {"sachet": 0.6}; others use CONF
+STABLE_FRAMES = 12               # the window the decision is made over
+STABLE_SHARE = 10                # this many of those frames agreeing = "stable" (a flicker doesn't reset it)
+SAVE_DATASET = True              # each drop-off's photo + the model's boxes go to dataset/raw for labelling
+DATASET = os.path.join("dataset", "raw")
 LOCAL_LOG = "kiosk_intake.csv"                 # always written, even with a backend
 
 # SapulMRF API. The kiosk is registered there once as a weighing station (e.g. KIOSK-01);
@@ -109,15 +116,25 @@ LIST_MAX = 8                 # rows per list sent to the kiosk: what its screen 
 # room behind the tray (chairs, a TV, people) never decides the category; start-up lists the ignored classes.
 # The stock YOLO model's waste-like classes are included until a waste-trained model replaces it.
 RECYCLABLE = {"bottle", "pet bottle", "plastic bottle", "can", "tin can", "aluminum can",
-              "glass bottle", "carton", "cardboard", "paper", "cup", "wine glass", "book"}
+              "glass bottle", "carton", "cardboard", "paper", "cup", "wine glass", "book",
+              "plastic_bottle", "glass_bottle"}
 BIODEGRADABLE = {"food", "food waste", "leaves", "peel", "organic",
-                 "banana", "apple", "orange", "broccoli", "carrot", "sandwich", "hot dog", "pizza", "donut", "cake"}
-RESIDUAL = {"sachet", "wrapper", "candy wrapper", "styro", "styrofoam", "plastic bag", "diaper", "tissue", "straw"}
+                 "banana", "apple", "orange", "broccoli", "carrot", "sandwich", "hot dog", "pizza", "donut", "cake",
+                 "food_waste"}
+RESIDUAL = {"sachet", "wrapper", "candy wrapper", "styro", "styrofoam", "plastic bag", "diaper", "tissue", "straw",
+            "plastic_bag"}
 # The kiosk camera is also the sorting camera: these classes become material suggestions in SapulMRF
 # (its materials: Plastic, Paper, Cardboard, Metal). Classes not listed send no suggestion.
 MATERIALS = {"bottle": "Plastic", "pet bottle": "Plastic", "plastic bottle": "Plastic",
              "can": "Metal", "tin can": "Metal", "aluminum can": "Metal",
-             "paper": "Paper", "cardboard": "Cardboard", "carton": "Cardboard", "cup": "Plastic", "book": "Paper"}
+             "paper": "Paper", "cardboard": "Cardboard", "carton": "Cardboard", "cup": "Plastic", "book": "Paper",
+             "plastic_bottle": "Plastic"}
+# The waste model's classes (pc_bridge/tools/data.yaml). Pre-labels map the current model's names onto them.
+DATASET_CLASSES = ["plastic_bottle", "can", "glass_bottle", "paper", "cardboard", "carton", "sachet", "plastic_bag",
+                   "styro", "food_waste", "leaves"]
+PRELABEL = {"bottle": "plastic_bottle", "wine glass": "glass_bottle", "book": "paper",
+            **{f: "food_waste" for f in ("banana", "apple", "orange", "broccoli", "carrot", "sandwich", "hot dog",
+                                         "pizza", "donut", "cake")}}
 IGNORED = {"person"}  # the resident's hand/arm is always in view; it must not decide the category
 
 COLORS = {"recyclable": (122, 195, 76), "residual": (58, 163, 242), "bio": (46, 90, 122)}  # BGR
@@ -131,6 +148,39 @@ def bucket(name: str):
     if n in BIODEGRADABLE:
         return "bio"
     return "residual" if n in RESIDUAL else None
+
+
+BUCKETS = ("recyclable", "residual", "bio")
+
+
+def vote(window):
+    """The decision over the steady window: [(category, counts, mean conf)] per frame ->
+    (majority category, frames agreeing, median counts, mean confidence). A brief flicker doesn't change it."""
+    seen = Counter(c for c, _, _ in window if c != "Nothing detected")
+    if not seen:
+        return "Nothing detected", 0, dict.fromkeys(BUCKETS, 0), None
+    cat, n = seen.most_common(1)[0]
+    agree = [(cnt, cf) for c, cnt, cf in window if c == cat]
+    counts = {k: int(median(cnt.get(k, 0) for cnt, _ in agree)) for k in BUCKETS}
+    confs = [cf for _, cf in agree if cf is not None]
+    return cat, n, counts, round(sum(confs) / len(confs), 2) if confs else None
+
+
+def yolo_labels(boxes, w, h):
+    """YOLO-format pre-labels in DATASET_CLASSES, from the model's boxes; boxes with no waste class are left out."""
+    lines = []
+    for x1, y1, x2, y2, name, _conf, _b in boxes:
+        cls = PRELABEL.get(name.lower(), name.lower())
+        if cls in DATASET_CLASSES:
+            lines.append(f"{DATASET_CLASSES.index(cls)} {(x1 + x2) / 2 / w:.6f} {(y1 + y2) / 2 / h:.6f} "
+                         f"{(x2 - x1) / w:.6f} {(y2 - y1) / h:.6f}")
+    return "\n".join(lines)
+
+
+def model_version(path):
+    """'best:1a2b3c4d': the file's name and the start of its hash, so SapulMRF can tell models apart."""
+    with open(path, "rb") as f:
+        return f"{Path(path).stem}:{hashlib.sha1(f.read()).hexdigest()[:8]}"[:40]
 
 
 def category_from(counts: Counter) -> str:
@@ -272,6 +322,7 @@ def fit_jpeg(jpeg, w, h, quality=80):
 class Bridge:
     def __init__(self, model_path, cam_index):
         self.model = YOLO(model_path) if YOLO and model_path else None
+        self.model_version = model_version(model_path) if self.model else None
         self.device = gpu_device() if self.model else "cpu"
         self.cap = open_camera(cam_index) if self.model else None
         self.frame, self.frame_id = None, 0   # newest camera frame, full resolution, clean
@@ -289,7 +340,9 @@ class Bridge:
         self.history = deque(maxlen=STABLE_FRAMES)
         self.last = {"recyclable": 0, "residual": 0, "bio": 0, "category": "Nothing detected"}
         self.fps = 0.0
-        self.snapshot = None  # (det, clean full-res frame, boxes) at the last stable moment of this drop-off
+        self.snapshot = None  # (det, clean full-res frame, boxes): the clearest steady moment of this drop-off
+        self.best = None      # (mean conf, frame, boxes) of the clearest frame agreeing with the decision so far
+        self.frame_info = ("Nothing detected", None)   # the newest frame's own category and mean confidence
         self.state = None     # last kiosk-state from SapulMRF
         self.next_code = self._load_next_code()
 
@@ -306,28 +359,25 @@ class Bridge:
     def infer(self, frame):
         """YOLO on one frame. Returns (det summary, boxes) and updates the stability history."""
         t0 = time.time()
-        res = self.model(frame, conf=CONF, imgsz=YOLO_IMGSZ, device=self.device, verbose=False)[0]
+        floor = min([CONF, *CLASS_CONF.values()])
+        res = self.model(frame, conf=floor, imgsz=YOLO_IMGSZ, device=self.device, verbose=False)[0]
         self.infer_ms = 0.8 * self.infer_ms + 0.2 * (time.time() - t0) * 1000
         counts, confs, boxes = Counter(), [], []
         for box in res.boxes:
-            name = self.model.names[int(box.cls)]
+            name, conf = self.model.names[int(box.cls)], float(box.conf)
             b = None if name in IGNORED else bucket(name)
-            if b is None:
+            if b is None or conf < CLASS_CONF.get(name.lower(), CONF):
                 continue
             counts[b] += 1
-            confs.append(float(box.conf))
-            boxes.append((*map(int, box.xyxy[0]), name, float(box.conf), b))
-        cat = category_from(counts)
-        self.history.append(cat)
-        same = 0
-        for c in reversed(self.history):
-            if c != cat:
-                break
-            same += 1
-        progress = 0.0 if cat == "Nothing detected" else same / STABLE_FRAMES
-        det = {"type": "det", "recyclable": counts["recyclable"], "residual": counts["residual"],
-               "bio": counts["bio"], "category": cat, "stable": progress >= 1, "progress": round(progress, 2),
-               "fps": round(self.fps), "conf": round(sum(confs) / len(confs), 2) if confs else None}
+            confs.append(conf)
+            boxes.append((*map(int, box.xyxy[0]), name, conf, b))
+        frame_conf = round(sum(confs) / len(confs), 2) if confs else None
+        self.frame_info = (category_from(counts), frame_conf)
+        self.history.append((self.frame_info[0], dict(counts), frame_conf))
+        cat, n, voted, conf = vote(self.history)
+        progress = min(1.0, n / STABLE_SHARE)
+        det = {"type": "det", **voted, "category": cat, "stable": n >= STABLE_SHARE, "progress": round(progress, 2),
+               "fps": round(self.fps), "conf": conf}
         return det, boxes
 
     def infer_loop(self):
@@ -345,8 +395,13 @@ class Bridge:
             self.last = det
             if not scanning:
                 self.history.clear()  # only a resident's scan may become "stable", not someone watching online
-            elif det["stable"]:
-                self.snapshot = (det, frame, self.boxes)  # what the camera decided, sent with the drop-off
+                self.best = None
+                continue
+            fcat, fconf = self.frame_info
+            if fcat == det["category"] and fconf is not None and (self.best is None or fconf >= self.best[0]):
+                self.best = (fconf, frame, self.boxes)   # the clearest frame that agrees with the decision
+            if det["stable"] and self.best:
+                self.snapshot = (det, self.best[1], self.best[2])  # sent with the drop-off
 
     def annotated(self, frame, boxes):
         out = frame.copy()
@@ -405,6 +460,8 @@ class Bridge:
                 if (m := MATERIALS.get(name.lower())) and conf > best.get(m, 0):
                     best[m] = conf
             body["materials"] = [{"label": m, "confidence": round(c, 3)} for m, c in best.items()]
+            if self.model_version:
+                body["model_version"] = self.model_version
             ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, PHOTO_QUALITY])
             if ok:
                 body["photo"] = base64.b64encode(jpg.tobytes()).decode()
@@ -424,6 +481,8 @@ class Bridge:
         if not code:
             code = f"K-{self.next_code}"  # K = made by the kiosk; D- codes come from SapulMRF
             self.next_code += 1
+        if SAVE_DATASET and self.snapshot:
+            self.save_example(code, *self.snapshot[1:])
         new = not os.path.exists(LOCAL_LOG)
         with open(LOCAL_LOG, "a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["code"] + list(record))
@@ -431,6 +490,20 @@ class Bridge:
                 w.writeheader()
             w.writerow({"code": code, **record})
         return code, actions
+
+    @staticmethod
+    def save_example(code, frame, boxes):
+        """The drop-off photo and the model's boxes as YOLO pre-labels, to correct in a labelling tool later."""
+        try:
+            os.makedirs(os.path.join(DATASET, "images"), exist_ok=True)
+            os.makedirs(os.path.join(DATASET, "labels"), exist_ok=True)
+            cv2.imwrite(os.path.join(DATASET, "images", f"{code}.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, PHOTO_QUALITY])
+            with open(os.path.join(DATASET, "labels", f"{code}.txt"), "w") as f:
+                f.write(yolo_labels(boxes, frame.shape[1], frame.shape[0]))
+            with open(os.path.join(DATASET, "classes.txt"), "w") as f:
+                f.write("\n".join(DATASET_CLASSES))
+        except OSError as e:  # a full disk must not stop a drop-off
+            print("dataset example not saved:", e)
 
     @staticmethod
     def to_outbox(body, folder):
@@ -648,7 +721,7 @@ class Bridge:
         if t == "mode":
             self.mode = "scan" if msg.get("mode") == "scan" else "idle"
             if self.mode == "scan":
-                self.snapshot = None  # a fresh scan: forget the previous camera result
+                self.snapshot = self.best = None  # a fresh scan: forget the previous camera result
             self.window = threading.BoundedSemaphore(IN_FLIGHT)
             print("kiosk mode:", self.mode)
         elif t == "intake":
@@ -659,7 +732,7 @@ class Bridge:
                 self.send_json({"type": "receipt", "ok": False})
                 return
             print("intake saved:", code, msg)
-            self.snapshot = None
+            self.snapshot = self.best = None
             self.send_json({"type": "receipt", "ok": True, "code": code})
             if actions.get("buzz"):
                 self.send_json({"type": "actuate", "buzz": actions["buzz"]})

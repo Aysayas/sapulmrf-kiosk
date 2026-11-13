@@ -5,3 +5,6 @@ sapulmrf-kiosk/pc_bridge/__pycache__/
 compile_commands.json
 sapulmrf-kiosk/pc_bridge/kiosk_shots/
 graphify-out/
+sapulmrf-kiosk/pc_bridge/dataset/
+sapulmrf-kiosk/pc_bridge/runs/
+sapulmrf-kiosk/pc_bridge/yolo11n.pt

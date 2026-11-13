@@ -1,0 +1,17 @@
+# The waste model's dataset. Keep `names` in step with DATASET_CLASSES in kiosk_bridge.py.
+# Layout (YOLO): dataset/train/{images,labels}, dataset/val/{images,labels}; see TRAINING.md.
+path: ../dataset   # train_waste.py replaces this with the absolute folder
+train: train/images
+val: val/images
+names:
+  0: plastic_bottle
+  1: can
+  2: glass_bottle
+  3: paper
+  4: cardboard
+  5: carton
+  6: sachet
+  7: plastic_bag
+  8: styro
+  9: food_waste
+  10: leaves
