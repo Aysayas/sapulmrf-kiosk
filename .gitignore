@@ -4,3 +4,4 @@ sapulmrf-kiosk/pc_bridge/outbox/
 sapulmrf-kiosk/pc_bridge/__pycache__/
 compile_commands.json
 sapulmrf-kiosk/pc_bridge/kiosk_shots/
+graphify-out/
