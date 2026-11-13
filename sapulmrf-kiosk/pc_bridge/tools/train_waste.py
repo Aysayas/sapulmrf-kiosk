@@ -9,7 +9,6 @@ import random
 import shutil
 from pathlib import Path
 
-import yaml
 from ultralytics import YOLO
 
 HERE = Path(__file__).resolve().parent
@@ -46,11 +45,12 @@ def main():
     args = ap.parse_args()
     n_train, n_val = split()
     print(f"Training on {n_train} photos, checking on {n_val}.")
-    data = yaml.safe_load((HERE / "data.yaml").read_text(encoding="utf-8"))
-    data["path"] = str(DATASET)   # ultralytics reads a relative path from its own datasets folder, not this one
+    # ultralytics reads a relative path from its own datasets folder, not this one: write the absolute folder
+    lines = [f"path: {DATASET.as_posix()}" if ln.startswith("path:") else ln
+             for ln in (HERE / "data.yaml").read_text(encoding="utf-8").splitlines()]
     (BRIDGE / "runs").mkdir(exist_ok=True)
     resolved = BRIDGE / "runs" / "data.yaml"
-    resolved.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    resolved.write_text("\n".join(lines) + "\n", encoding="utf-8")
     model = YOLO(args.base)
     model.train(data=str(resolved), epochs=args.epochs, imgsz=args.imgsz, batch=args.batch, device=0,
                 patience=20, project=str(BRIDGE / "runs"), name="waste", exist_ok=True)
