@@ -1226,7 +1226,7 @@ static void paintCompostForm() {
   fCompost.label = finishing >= 0 ? S_COMPOST_MADE : S_START_KG;
   paintField(fCompost);
   float v = fCompost.v.toFloat();
-  paintSave(btnCompSave, v > 0 && (finishing >= 0 || v <= wetWaiting + 0.5f));   // SapulMRF allows 0.5 kg over
+  paintSave(btnCompSave, v > 0 && (finishing >= 0 || (wetWaiting > 0 && v <= wetWaiting + 0.5f)));   // SapulMRF allows 0.5 kg over
   if (!busy) setButtonText(btnCompSave, T(finishing >= 0 ? S_SAVE_FINISH : S_START_BATCH));
 }
 
@@ -1386,7 +1386,7 @@ static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
   if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); opAsk("today"); }
   if (scr == scrSortMat) enterSortMat();
   if (scr == scrSeg || scr == scrSort) enterForm(scr, cur);
-  if (scr == scrCompost && cur != scrCompost) enterCompost();
+  if (scr == scrCompost) { if (cur != scrCompost) enterCompost(); else { paintBatches(); paintCompostForm(); } }   // a language switch rebuilt it
 }
 
 void goTo(lv_obj_t *scr) {
