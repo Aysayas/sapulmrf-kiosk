@@ -24,7 +24,7 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
                      {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
         operator mode (an MRF operator signed in with their own SapulMRF kiosk PIN):
         kiosk -> PC  {"type":"operators"}  {"type":"pin","user_id":3,"pin":"2468"}  {"type":"lock"}
-                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort",...}  (a sort may carry
+                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort"|"compost"|"compost_start"|"compost_log"|"compost_finish",...}  (a sort may carry
                       the camera's suggestion_id + guess_material_id: the bridge then confirms or corrects that suggestion)
                      {"type":"photo","delivery_id":12}
         PC -> kiosk  {"type":"operators","items":[{"id":3,"name":"Juan"}]}  {"type":"auth","ok":true,"name":"Juan"}
@@ -272,6 +272,7 @@ def op_request(do, m):
     if do == "today":
         return "GET", "/overview", None, lambda o: {
             "drops": o["today_deliveries"], "kg": o["today_kg"], "segregate": o["awaiting_segregation"],
+            "waiting": o.get("wet_waiting_kg", 0),
             "areas": [{"name": a["name"], "pct": a["pct"]} for a in o["areas"][:LIST_MAX]]}
     if do == "waiting":
         waiting = "sorting" if m.get("for") == "sorting" else "segregation"
@@ -289,6 +290,18 @@ def op_request(do, m):
         return "POST", "/sorting", {"delivery_id": int(m["delivery_id"]), "rows": [{
             "material_id": int(m["material_id"]) if m.get("material_id") else None,  # none = residual
             "storage_area_id": int(m["area_id"]), "kg": float(m["kg"]), "bags": int(m.get("bags") or 0)}]}, None
+    if do == "compost":  # wet waste waiting, and the open batches
+        return "GET", "/operations/compost", None, lambda v: {
+            "waiting": v["wet_waiting_kg"],
+            "batches": [{k: b[k] for k in ("id", "code", "day", "start_kg")}
+                        for b in v["batches"] if not b["finished_at"]][:LIST_MAX]}
+    if do == "compost_start":
+        return "POST", "/compost/batches", {"start_kg": float(m["kg"]), "sensor_id": None}, None
+    if do in ("compost_log", "compost_finish"):
+        body = ({"type": "inspection", "finished_kg": float(m["kg"])} if do == "compost_finish" else {"type": m.get("type")})
+        if body["type"] not in ("turning", "watering", "inspection"):
+            raise ValueError(f"unknown compost activity {body['type']!r}")
+        return "POST", f"/compost/batches/{int(m['batch_id'])}/activities", body, None
     raise ValueError(f"unknown operator task {do!r}")
 
 
