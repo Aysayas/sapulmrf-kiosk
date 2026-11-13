@@ -65,7 +65,9 @@ bool displayBegin() {
   cfg.data_width = 16;
   cfg.bits_per_pixel = 16;
   cfg.num_fbs = 2;
-  cfg.bounce_buffer_size_px = W * 10;      // 10 lines in internal RAM, refilled from PSRAM
+  // 20 lines in internal RAM, refilled from PSRAM. 10 was too few: when Wi-Fi or a JPEG decode held PSRAM, a refill
+  // came late and the panel showed stale pixels as short horizontal lines on the left edge. Must divide W*H evenly.
+  cfg.bounce_buffer_size_px = W * 20;
   cfg.dma_burst_size = 64;
   cfg.hsync_gpio_num = TFT_HSYNC;
   cfg.vsync_gpio_num = TFT_VSYNC;

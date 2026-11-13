@@ -859,9 +859,9 @@ static void buildPin() {
   scrPin = screen();
   lv_obj_t *side = box(scrPin, 24, 64, 336, 392, T_BRAND, 24);
   text(side, T(S_OP_MODE), &atk_r18, 0xC9DDD0, 28, 28);
-  lblPinName = text(side, "", &atk_b32, 0xFFFFFF, 28, 56, 290);
+  lblPinName = text(side, "", &atk_b24, 0xFFFFFF, 28, 60, 290);   // b24: a full name like "Simulator (operator)" fits
   lv_label_set_long_mode(lblPinName, LV_LABEL_LONG_DOT);
-  lv_obj_set_height(lblPinName, 44);
+  lv_obj_set_height(lblPinName, 32);
   text(side, T(S_OP_PIN), &atk_r24, 0xDCEFE2, 28, 108, 290);
   for (int i = 0; i < 6; i++) {
     pinDots[i] = box(side, 28 + i * 46, 160, 30, 30, 0xFFFFFF, LV_RADIUS_CIRCLE);
@@ -941,8 +941,10 @@ static void buildToday() {
   text(scrToday, T(S_STORAGE), &atk_b24, T_INK, T_MARGIN, 232);
   for (int i = 0; i < 4; i++) {
     areaRow[i] = box(scrToday, T_MARGIN, 268 + i * 32, 800 - 2 * T_MARGIN, 28, T_BG, 0);
-    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 2);
-    areaBar[i] = progress(areaRow[i], 220, 8, 400, 12, T_PRIMARY);
+    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 2, 240);
+    lv_label_set_long_mode(areaName[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_height(areaName[i], 24);
+    areaBar[i] = progress(areaRow[i], 256, 8, 380, 12, T_PRIMARY);
     areaPct[i] = text(areaRow[i], "", &atk_b24, T_INK);
     lv_obj_align(areaPct[i], LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN);
@@ -972,7 +974,7 @@ static void paintToday(JsonObject o) {
 }
 
 // ---- Camera review: the photo, what the camera suggested, then Keep / Change / Not recyclable
-static lv_obj_t *imgPhoto, *lblNoPhoto, *lblRevCount, *lblRevName, *lblRevPct, *lblRevEmpty, *revBtn[3];
+static lv_obj_t *photoBox, *imgPhoto, *lblNoPhoto, *lblRevCount, *lblRevName, *lblRevPct, *lblRevEmpty, *revBtn[3];
 
 static void sendConfirm(bool notRecyclable) {
   if (busy || !nSugg) return;
@@ -995,11 +997,11 @@ static void paintReview() {
     lv_label_set_text(lblRevEmpty, listLoading ? T(S_LOADING) : T(S_NO_REVIEW));
     lv_obj_clear_flag(lblRevEmpty, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(lblRevCount, ""); lv_label_set_text(lblRevName, ""); lv_label_set_text(lblRevPct, "");
-    lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(photoBox, LV_OBJ_FLAG_HIDDEN);
     return;
   }
   lv_obj_add_flag(lblRevEmpty, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(photoBox, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text_fmt(lblRevCount, T(S_N_OF), suggTotal);
   lv_label_set_text(lblRevName, sugg[0].name.c_str());
   lv_label_set_text_fmt(lblRevPct, T(S_SURE), sugg[0].pct);
@@ -1007,7 +1009,7 @@ static void paintReview() {
 
 static void buildReview() {
   scrReview = screen();
-  lv_obj_t *ph = box(scrReview, 24, 64, PHOTO_W * 3 / 2, PHOTO_H * 3 / 2, T_VIDEO, 12);
+  lv_obj_t *ph = photoBox = box(scrReview, 24, 64, PHOTO_W * 3 / 2, PHOTO_H * 3 / 2, T_VIDEO, 12);
   imgPhoto = lv_img_create(ph);
   lv_img_set_src(imgPhoto, &photoDsc);
   lv_img_set_zoom(imgPhoto, 384);              // 320x180 shown at 1.5x
@@ -1022,7 +1024,7 @@ static void buildReview() {
   revBtn[0] = button(scrReview, T(S_KEEP), px, 184, pw, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b24, onKeep);
   revBtn[1] = button(scrReview, T(S_CHANGE), px, 258, pw, T_TAP, T_CARD, T_INK, &atk_b24, onReviewChange, nullptr, T_LINE);
   revBtn[2] = button(scrReview, T(S_NOT_RECYC), px, 332, pw, T_TAP, T_CARD, T_ERR, &atk_b24, onNotRecyclable, nullptr, T_LINE);
-  lblRevEmpty = text(scrReview, "", &atk_b24, T_INK2, px, 184, pw);
+  lblRevEmpty = text(scrReview, "", &atk_b32, T_INK2, T_MARGIN, 140, 800 - 2 * T_MARGIN);
   button(scrReview, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onToOp, nullptr, T_LINE);
 }
 
@@ -1039,9 +1041,9 @@ void uiOnPhoto(int deliveryId, bool ok) {
 }
 
 static void askPhoto() {
+  if (!nSugg) return;
   lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
   lv_obj_clear_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN);
-  if (!nSugg) return;
   if (!sugg[0].did) { lv_label_set_text(lblNoPhoto, T(S_NO_PHOTO)); return; }
   lv_label_set_text(lblNoPhoto, T(S_LOADING));
   JsonDocument d; d["type"] = "photo"; d["delivery_id"] = sugg[0].did; wsSend(d);
@@ -1397,6 +1399,8 @@ bool uiGoto(const char *n) {
   const char *names[] = {"welcome", "purok", "scan", "pick", "weigh", "receipt", "pin", "operator", "today", "review"};
   if (!strcmp(n, "en") || !strcmp(n, "tl")) { lang = !strcmp(n, "tl"); buildAll(); return true; }
   if (!strcmp(n, "who")) { choose(L_NAMES); return true; }
+  if (!strcmp(n, "seglist")) { choose(L_SEG); return true; }
+  if (!strcmp(n, "sortlist")) { choose(L_SORT); return true; }
   for (int i = 0; i < 10; i++) if (!strcmp(n, names[i])) {
     if (all[i] == scrWeigh && !purok) purok = 3;    // a believable screen for review shots
     goTo(all[i]);
