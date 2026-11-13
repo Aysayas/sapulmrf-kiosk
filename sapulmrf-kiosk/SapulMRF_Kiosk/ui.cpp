@@ -27,7 +27,7 @@ enum Str {
   S_PICK_MAT, S_PICK_AREA, S_WAIT_SEG, S_WAIT_SORT, S_NO_WAITING, S_SEGREGATED, S_MIXED_C, S_WET, S_DRY, S_KG_F, S_BAGS,
   S_SAVE, S_SAVING, S_SAVED_OK, S_SIGNED_OUT, S_RESIDUAL_M, S_N_WAITING, S_CAM_GUESS, S_AREA_IS, S_TOTAL,
   S_T_COMPOST, S_WET_WAITING, S_START_BATCH, S_NOTHING_WAITING, S_NO_BATCHES, S_TURNING, S_WATERING,
-  S_INSPECT, S_FINISH, S_COMPOST_MADE, S_START_KG, S_BATCH_LINE, S_SAVE_FINISH,
+  S_INSPECT, S_FINISH, S_COMPOST_MADE, S_START_KG, S_BATCH_LINE, S_SAVE_FINISH, S_KG_WAITING,
   S_COUNT
 };
 static const char *const WORDS[][2] = {
@@ -134,6 +134,7 @@ static const char *const WORDS[][2] = {
   {"Wet waste", "Basang basura"},
   {"%s  ·  day %d  ·  %s kg", "%s  ·  araw %d  ·  %s kg"},
   {"Save finished", "I-save na tapos"},
+  {"%s kg waiting", "%s kg naghihintay"},
 };
 static_assert(sizeof WORDS / sizeof WORDS[0] == S_COUNT, "every word needs English and Tagalog");
 static int lang = DEFAULT_LANG;
@@ -926,14 +927,15 @@ static void buildOperator() {
   for (int i = 0; i < 3; i++) {                  // three 72 px tiles between the greeting and the Lock button
     lv_obj_t *b = button(scrOp, "", T_MARGIN, 164 + i * 80, 360, 72, i ? T_CARD : T_PRIMARY, i ? T_INK : 0xFFFFFF,
                          &atk_b24, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
+    lv_obj_set_style_pad_all(b, 0, 0);            // place the title and count exactly: no button padding
     lv_obj_t *l = lv_obj_get_child(b, 0);
     lv_label_set_text_fmt(l, "%s  %s", icons[i], T(tiles[i]));
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, 0);   // the button centres its label; title on top, count under
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     lv_obj_set_size(l, 328, 30);
-    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 4);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 16, 8);
     tileCount[i] = text(b, "", &atk_r18, i ? T_INK2 : 0xDCEFE2);
-    lv_obj_align(tileCount[i], LV_ALIGN_BOTTOM_LEFT, 36, -4);   // under the title, past its icon
+    lv_obj_align(tileCount[i], LV_ALIGN_TOP_LEFT, 52, 40);   // under the title, lined up with its words
   }
   const int px = T_MARGIN + 376, pw = 800 - T_MARGIN - px;
   lblOpToday = text(scrOp, todayText[0] ? todayText : T(S_LOADING), &atk_r18, T_INK, px, 170, pw);
@@ -959,7 +961,7 @@ static void paintHome(JsonObject o) {
   lv_label_set_text_fmt(tileCount[0], T(S_N_WAITING), (int)(o["segregate"] | 0));
   lv_label_set_text_fmt(tileCount[1], T(S_N_WAITING), (int)(o["sort"] | 0));
   char w[16]; fmtKg(w, sizeof w, o["waiting"] | 0.0f);
-  lv_label_set_text_fmt(tileCount[2], "%s kg", w);   // wet waste waiting for compost
+  lv_label_set_text_fmt(tileCount[2], T(S_KG_WAITING), w);   // wet waste waiting for compost
   JsonArray a = o["areas"];
   for (int i = 0; i < 4; i++) {
     if (i >= (int)a.size()) { lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN); continue; }
@@ -1213,7 +1215,7 @@ static void fillWaits(JsonArray a) {
 }
 
 // ---- Compost: wet waste waiting, start a batch from it, log turning / watering / checks, finish
-static const int MAX_BATCHES = 4;
+static const int MAX_BATCHES = 3;              // two bays at the MRF; three cards fill the column
 struct Batch { int id; String label; };
 static Batch batches[MAX_BATCHES];
 static int nBatches = 0, finishing = -1;        // finishing = the batch whose compost kg is being typed
@@ -1250,12 +1252,12 @@ static void paintBatches() {
   if (!nBatches) { text(batchBox, T(S_NO_BATCHES), &atk_r18, T_INK2, 0, 0); return; }
   static const Str acts[4] = {S_TURNING, S_WATERING, S_INSPECT, S_FINISH};
   for (int i = 0; i < nBatches; i++) {
-    lv_obj_t *c = box(batchBox, 0, i * 84, 376, 76, T_CARD, 12);
+    lv_obj_t *c = box(batchBox, 0, i * 110, 376, 102, T_CARD, 12);
     lv_obj_set_style_border_width(c, i == finishing ? 4 : 2, 0);
     lv_obj_set_style_border_color(c, lv_color_hex(i == finishing ? T_PRIMARY : T_LINE), 0);
-    text(c, batches[i].label.c_str(), &atk_b24, T_INK, 12, 4);
-    for (int a = 0; a < 4; a++)
-      button(c, T(acts[a]), 8 + a * 91, 36, 85, 34, a == 3 ? T_PRIMARY : T_BG, a == 3 ? 0xFFFFFF : T_INK, &atk_r18,
+    text(c, batches[i].label.c_str(), &atk_b24, T_INK, 12, 8);
+    for (int a = 0; a < 4; a++)                  // 52 px: big enough for gloved fingers
+      button(c, T(acts[a]), 8 + a * 91, 42, 85, 52, a == 3 ? T_PRIMARY : T_BG, a == 3 ? 0xFFFFFF : T_INK, &atk_r18,
              onBatchDo, (void *)(intptr_t)(i * 4 + a), a == 3 ? 0 : T_LINE);
   }
 }
@@ -1527,6 +1529,7 @@ bool uiGoto(const char *n) {
   if (!strcmp(n, "who")) { choose(L_NAMES); return true; }
   if (!strcmp(n, "seglist")) { choose(L_SEG); return true; }
   if (!strcmp(n, "sortlist")) { choose(L_SORT); return true; }
+  if (!strcmp(n, "compost")) { goTo(scrCompost); return true; }
   for (int i = 0; i < 8; i++) if (!strcmp(n, names[i])) {
     if (all[i] == scrWeigh && !purok) purok = 3;    // a believable screen for review shots
     goTo(all[i]);
