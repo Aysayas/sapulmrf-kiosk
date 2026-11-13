@@ -1391,7 +1391,7 @@ static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
   if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); opAsk("today"); }
   if (scr == scrSortMat) enterSortMat();
   if (scr == scrSeg || scr == scrSort) enterForm(scr, cur);
-  if (scr == scrCompost) { if (cur != scrCompost) enterCompost(); else { paintBatches(); paintCompostForm(); } }   // a language switch rebuilt it
+  if (scr == scrCompost) { if (cur != scrCompost) enterCompost(); else { paintBatches(); paintCompostForm(); opAsk("compost"); } }   // a language switch rebuilt it: reload its words
 }
 
 void goTo(lv_obj_t *scr) {
