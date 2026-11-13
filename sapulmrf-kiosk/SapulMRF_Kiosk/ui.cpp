@@ -26,6 +26,8 @@ enum Str {
   S_STORAGE, S_NO_PHOTO,
   S_PICK_MAT, S_PICK_AREA, S_WAIT_SEG, S_WAIT_SORT, S_NO_WAITING, S_SEGREGATED, S_MIXED_C, S_WET, S_DRY, S_KG_F, S_BAGS,
   S_SAVE, S_SAVING, S_SAVED_OK, S_SIGNED_OUT, S_RESIDUAL_M, S_N_WAITING, S_CAM_GUESS, S_AREA_IS, S_TOTAL,
+  S_T_COMPOST, S_WET_WAITING, S_START_BATCH, S_NOTHING_WAITING, S_NO_BATCHES, S_TURNING, S_WATERING,
+  S_INSPECT, S_FINISH, S_COMPOST_MADE, S_START_KG, S_BATCH_LINE, S_SAVE_FINISH,
   S_COUNT
 };
 static const char *const WORDS[][2] = {
@@ -119,6 +121,19 @@ static const char *const WORDS[][2] = {
   {"%s  ·  camera %d%%", "%s  ·  camera %d%%"},
   {"Area: %s  " LV_SYMBOL_RIGHT, "Imbakan: %s  " LV_SYMBOL_RIGHT},
   {"Total %s kg", "Kabuuan %s kg"},
+  {"Compost", "Kompost"},
+  {"%s kg wet waste waiting", "%s kg basang basura ang naghihintay"},
+  {"Start batch", "Simulan ang batch"},
+  {"No wet waste waiting. Do the wet/dry checks first.", "Walang naghihintay na basang basura. Mag-segregate muna."},
+  {"No open batches", "Walang bukas na batch"},
+  {"Turn", "Haluin"},
+  {"Water", "Diligan"},
+  {"Check", "Suriin"},
+  {"Finish", "Tapusin"},
+  {"Compost made", "Nagawang kompost"},
+  {"Wet waste", "Basang basura"},
+  {"%s  ·  day %d  ·  %s kg", "%s  ·  araw %d  ·  %s kg"},
+  {"Save finished", "I-save na tapos"},
 };
 static_assert(sizeof WORDS / sizeof WORDS[0] == S_COUNT, "every word needs English and Tagalog");
 static int lang = DEFAULT_LANG;
@@ -151,7 +166,7 @@ static bool afterDropOff = false;      // going home from a receipt resets the l
 
 // screens and the widgets that change
 static lv_obj_t *scrHome, *scrPurok, *scrScan, *scrPick, *scrWeigh, *scrReceipt, *scrPin, *scrOp;
-static lv_obj_t *scrList, *scrSortMat, *scrSeg, *scrSort;   // staff: chooser, material with photo, the two forms
+static lv_obj_t *scrList, *scrSortMat, *scrSeg, *scrSort, *scrCompost;   // staff: chooser, material with photo, the two forms
 static lv_obj_t *lblToday, *alertBox, *lblAlert;
 static lv_obj_t *hintBar, *lblHint;
 static lv_obj_t *imgVideo, *lblVideoWait, *lblLive, *frameRing, *gotBar, *lblGot, *lblScanStatus, *barSteady;
@@ -722,7 +737,8 @@ uint16_t *uiPhotoBuf = nullptr;
 static lv_img_dsc_t photoDsc;
 
 static bool isOpScreen(lv_obj_t *s) {
-  return s == scrOp || s == scrSortMat || s == scrSeg || s == scrSort || (s == scrList && listKind != L_NAMES);
+  return s == scrOp || s == scrSortMat || s == scrSeg || s == scrSort || s == scrCompost ||
+         (s == scrList && listKind != L_NAMES);
 }
 
 static void opAsk(const char *what) { JsonDocument d; d["type"] = "op"; d["do"] = what; wsSend(d); }
@@ -886,10 +902,13 @@ void uiOnAuth(JsonDocument &d) {
 }
 
 // ---- operator home: today's numbers and storage on the right, the two tasks with what's waiting on the left
-static lv_obj_t *lblHi, *lblNetLine, *lblIpLine, *lblOpToday, *tileCount[2];
+static lv_obj_t *lblHi, *lblNetLine, *lblIpLine, *lblOpToday, *tileCount[3];
 static lv_obj_t *areaRow[4], *areaName[4], *areaBar[4], *areaPct[4];
 static void onOpLock(lv_event_t *) { goTo(scrHome); }   // goTo signs out when leaving the staff screens
-static void onTile(lv_event_t *e) { choose((int)(intptr_t)lv_event_get_user_data(e) ? L_SORT : L_SEG); }
+static void onTile(lv_event_t *e) {
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  if (i == 2) goTo(scrCompost); else choose(i ? L_SORT : L_SEG);
+}
 
 static void buildOperator() {
   scrOp = screen();
@@ -902,16 +921,16 @@ static void buildOperator() {
   lv_obj_set_height(lblOpAlert, 24);
   lv_obj_align(lblOpAlert, LV_ALIGN_LEFT_MID, 14, 0);
   lv_obj_add_flag(opAlert, LV_OBJ_FLAG_HIDDEN);
-  const Str tiles[2] = {S_T_SEG, S_T_SORT};
-  const char *icons[2] = {LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE};
-  for (int i = 0; i < 2; i++) {
-    lv_obj_t *b = button(scrOp, "", T_MARGIN, 164 + i * 116, 360, 104, i ? T_CARD : T_PRIMARY, i ? T_INK : 0xFFFFFF,
-                         &atk_b32, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
+  const Str tiles[3] = {S_T_SEG, S_T_SORT, S_T_COMPOST};
+  const char *icons[3] = {LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE, LV_SYMBOL_LOOP};
+  for (int i = 0; i < 3; i++) {                  // three 72 px tiles between the greeting and the Lock button
+    lv_obj_t *b = button(scrOp, "", T_MARGIN, 164 + i * 80, 360, 72, i ? T_CARD : T_PRIMARY, i ? T_INK : 0xFFFFFF,
+                         &atk_b24, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
     lv_obj_t *l = lv_obj_get_child(b, 0);
     lv_label_set_text_fmt(l, "%s  %s", icons[i], T(tiles[i]));
-    lv_obj_align(l, LV_ALIGN_CENTER, 0, -16);
-    tileCount[i] = text(b, "", &atk_r24, i ? T_INK2 : 0xDCEFE2);
-    lv_obj_align(tileCount[i], LV_ALIGN_CENTER, 0, 24);
+    lv_obj_align(l, LV_ALIGN_LEFT_MID, 16, 0);
+    tileCount[i] = text(b, "", &atk_r18, i ? T_INK2 : 0xDCEFE2);
+    lv_obj_align(tileCount[i], LV_ALIGN_RIGHT_MID, -16, 0);
   }
   const int px = T_MARGIN + 376, pw = 800 - T_MARGIN - px;
   lblOpToday = text(scrOp, todayText[0] ? todayText : T(S_LOADING), &atk_r18, T_INK, px, 170, pw);
@@ -936,6 +955,8 @@ static void paintHome(JsonObject o) {
   lv_label_set_text_fmt(lblOpToday, T(S_TODAY), k, (int)(o["drops"] | 0));
   lv_label_set_text_fmt(tileCount[0], T(S_N_WAITING), (int)(o["segregate"] | 0));
   lv_label_set_text_fmt(tileCount[1], T(S_N_WAITING), (int)(o["sort"] | 0));
+  char w[16]; fmtKg(w, sizeof w, o["waiting"] | 0.0f);
+  lv_label_set_text_fmt(tileCount[2], "%s kg", w);   // wet waste waiting for compost
   JsonArray a = o["areas"];
   for (int i = 0; i < 4; i++) {
     if (i >= (int)a.size()) { lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN); continue; }
@@ -1055,9 +1076,15 @@ static void paintSort() {
   paintSave(btnSortSave, has && fKg.v.toFloat() > 0);
 }
 
+static void paintCompostForm();
+static void repaintForm() {
+  lv_obj_t *s = lv_scr_act();
+  if (s == scrSeg) paintSeg(); else if (s == scrSort) paintSort(); else if (s == scrCompost) paintCompostForm();
+}
+
 static void onField(lv_event_t *e) {
   activeField = (NumField *)lv_event_get_user_data(e);
-  if (lv_scr_act() == scrSeg) paintSeg(); else paintSort();
+  repaintForm();
 }
 
 static void onFormKey(lv_event_t *e) {
@@ -1074,7 +1101,7 @@ static void onFormKey(lv_event_t *e) {
     char s[16]; fmtKg(s, sizeof s, rest > 0 ? rest : 0);
     fDry.v = fWet.v.length() ? s : "";
   }
-  if (lv_scr_act() == scrSeg) paintSeg(); else paintSort();
+  repaintForm();
 }
 
 static void onCond(lv_event_t *e) { segCond = (int)(intptr_t)lv_event_get_user_data(e); paintSeg(); }
@@ -1182,11 +1209,113 @@ static void fillWaits(JsonArray a) {
   }
 }
 
+// ---- Compost: wet waste waiting, start a batch from it, log turning / watering / checks, finish
+static const int MAX_BATCHES = 4;
+struct Batch { int id; String label; };
+static Batch batches[MAX_BATCHES];
+static int nBatches = 0, finishing = -1;        // finishing = the batch whose compost kg is being typed
+static float wetWaiting = 0;
+static NumField fCompost = {nullptr, "", S_START_KG, true};
+static lv_obj_t *lblCompWait, *batchBox, *btnCompSave;
+
+static void paintCompostForm() {
+  char k[16]; fmtKg(k, sizeof k, wetWaiting);
+  if (finishing >= 0) lv_label_set_text(lblCompWait, batches[finishing].label.c_str());
+  else if (wetWaiting <= 0) lv_label_set_text(lblCompWait, T(S_NOTHING_WAITING));
+  else lv_label_set_text_fmt(lblCompWait, T(S_WET_WAITING), k);
+  fCompost.label = finishing >= 0 ? S_COMPOST_MADE : S_START_KG;
+  paintField(fCompost);
+  float v = fCompost.v.toFloat();
+  paintSave(btnCompSave, v > 0 && (finishing >= 0 || v <= wetWaiting + 0.5f));   // SapulMRF allows 0.5 kg over
+  if (!busy) setButtonText(btnCompSave, T(finishing >= 0 ? S_SAVE_FINISH : S_START_BATCH));
+}
+
+static void paintBatches();
+
+static void onBatchDo(lv_event_t *e) {           // user data: batch index * 4 + action (0-2 log it, 3 finish)
+  if (busy) return;
+  int v = (int)(intptr_t)lv_event_get_user_data(e), i = v / 4, a = v % 4;
+  if (i >= nBatches) return;
+  if (a == 3) { finishing = i; fCompost.v = ""; activeField = &fCompost; paintBatches(); paintCompostForm(); return; }
+  static const char *const kinds[3] = {"turning", "watering", "inspection"};
+  JsonDocument d; d["type"] = "op"; d["do"] = "compost_log"; d["batch_id"] = batches[i].id; d["activity"] = kinds[a];
+  wsSend(d); setBusy(true); paintCompostForm();
+}
+
+static void paintBatches() {
+  lv_obj_clean(batchBox);
+  if (!nBatches) { text(batchBox, T(S_NO_BATCHES), &atk_r18, T_INK2, 0, 0); return; }
+  static const Str acts[4] = {S_TURNING, S_WATERING, S_INSPECT, S_FINISH};
+  for (int i = 0; i < nBatches; i++) {
+    lv_obj_t *c = box(batchBox, 0, i * 84, 376, 76, T_CARD, 12);
+    lv_obj_set_style_border_width(c, i == finishing ? 4 : 2, 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(i == finishing ? T_PRIMARY : T_LINE), 0);
+    text(c, batches[i].label.c_str(), &atk_b24, T_INK, 12, 4);
+    for (int a = 0; a < 4; a++)
+      button(c, T(acts[a]), 8 + a * 91, 36, 85, 34, a == 3 ? T_PRIMARY : T_BG, a == 3 ? 0xFFFFFF : T_INK, &atk_r18,
+             onBatchDo, (void *)(intptr_t)(i * 4 + a), a == 3 ? 0 : T_LINE);
+  }
+}
+
+static void fillCompost(JsonObject o) {
+  wetWaiting = o["waiting"] | 0.0f;
+  nBatches = 0;
+  for (JsonObject b : o["batches"].as<JsonArray>()) {
+    if (nBatches == MAX_BATCHES) break;
+    char k[16]; fmtKg(k, sizeof k, b["start_kg"] | 0.0f);
+    char line[64]; snprintf(line, sizeof line, T(S_BATCH_LINE), (const char *)(b["code"] | ""), (int)(b["day"] | 0), k);
+    batches[nBatches++] = {b["id"] | 0, String(line)};
+  }
+  if (finishing >= nBatches) finishing = -1;
+  if (finishing < 0) {                           // a new batch starts with everything that's waiting
+    char k[16]; fmtKg(k, sizeof k, wetWaiting);
+    fCompost.v = wetWaiting > 0 ? k : "";
+  }
+  activeField = &fCompost;
+  paintBatches();
+  paintCompostForm();
+}
+
+static void enterCompost() {
+  finishing = -1; nBatches = 0; wetWaiting = 0; fCompost.v = ""; activeField = &fCompost;
+  lv_label_set_text(lblCompWait, T(S_LOADING));
+  paintBatches();
+  opAsk("compost");
+}
+
+static void onCompostBack(lv_event_t *) {
+  if (finishing >= 0) { enterCompost(); return; }   // leave Finish, back to starting a batch
+  goTo(scrOp);
+}
+
+static void onCompostSave(lv_event_t *) {
+  if (busy) return;
+  JsonDocument d; d["type"] = "op";
+  if (finishing >= 0) { d["do"] = "compost_finish"; d["batch_id"] = batches[finishing].id; }
+  else d["do"] = "compost_start";
+  d["kg"] = fCompost.v.toFloat();
+  wsSend(d); setBusy(true); paintCompostForm();
+}
+
+static void buildCompost() {
+  scrCompost = screen();
+  text(scrCompost, T(S_T_COMPOST), &atk_b32, T_INK, T_MARGIN, 58);
+  lblCompWait = text(scrCompost, "", &atk_r18, T_INK, T_MARGIN, 104, 356);
+  fieldButton(scrCompost, fCompost, 156);
+  lv_obj_t *kp = keypad(scrCompost, formKeys, T_MARGIN, 228, 356, 164, onFormKey);
+  lv_obj_set_style_text_font(kp, &atk_b32, LV_PART_ITEMS);
+  batchBox = box(scrCompost, 400, 64, 376, 330, T_BG);
+  button(scrCompost, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCompostBack, nullptr, T_LINE);
+  btnCompSave = button(scrCompost, T(S_START_BATCH), T_MARGIN + 184, 404, 564, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32,
+                       onCompostSave);
+}
+
 void uiOnOp(JsonDocument &d) {
   const char *what = d["do"] | "";
   bool ok = d["ok"] | false;
   lv_obj_t *cur = lv_scr_act();
-  bool save = !strcmp(what, "segregate") || !strcmp(what, "sort");
+  bool compostSave = !strncmp(what, "compost_", 8);
+  bool save = !strcmp(what, "segregate") || !strcmp(what, "sort") || compostSave;
   if (save) setBusy(false);
   if (d["signed_out"] | false) {                 // the session ended (30 minutes, or locked elsewhere)
     signedIn = false;
@@ -1199,8 +1328,16 @@ void uiOnOp(JsonDocument &d) {
     if (cur == scrList) paintList();
     if (cur == scrSeg) paintSeg();
     if (cur == scrSort) paintSort();
+    if (cur == scrCompost) paintCompostForm();
     return;
   }
+  if (compostSave) {                             // saved: show it, then the fresh balance and batches
+    toast(T(S_SAVED_OK), true);
+    finishing = -1; fCompost.v = "";
+    if (cur == scrCompost) opAsk("compost");
+    return;
+  }
+  if (!strcmp(what, "compost")) { if (cur == scrCompost) fillCompost(d["data"].as<JsonObject>()); return; }
   if (save) {
     const char *note = d["note"] | "";           // the sort saved, but the camera's suggestion wasn't updated
     if (*note) toast((String(T(S_SAVED_OK)) + ". " + note).c_str(), false); else toast(T(S_SAVED_OK), true);
@@ -1249,6 +1386,7 @@ static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
   if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); opAsk("today"); }
   if (scr == scrSortMat) enterSortMat();
   if (scr == scrSeg || scr == scrSort) enterForm(scr, cur);
+  if (scr == scrCompost && cur != scrCompost) enterCompost();
 }
 
 void goTo(lv_obj_t *scr) {
@@ -1305,18 +1443,18 @@ void goTo(lv_obj_t *scr) {
 static void buildAll(int show) {
   lv_obj_t *cur = lv_scr_act();
   lv_obj_t *old[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrSortMat,
-                     scrSeg, scrSort};
+                     scrSeg, scrSort, scrCompost};
   const int N = sizeof old / sizeof old[0];
   int at = 0;
   for (int i = 0; i < N; i++) if (old[i] && old[i] == cur) at = i;
   if (show >= 0) at = show;
-  for (NumField *f : {&fWet, &fDry, &fKg, &fBags}) f->btn = nullptr;
+  for (NumField *f : {&fWet, &fDry, &fKg, &fBags, &fCompost}) f->btn = nullptr;
   buildHome(); buildPurok(); buildScan(); buildPick(); buildWeigh(); buildReceipt(); buildPin(); buildOperator();
-  buildList(); buildSortMat(); buildSeg(); buildSort();
+  buildList(); buildSortMat(); buildSeg(); buildSort(); buildCompost();
   paintAlert();
   paintLang();
   lv_obj_t *now[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrSortMat,
-                     scrSeg, scrSort};
+                     scrSeg, scrSort, scrCompost};
   lv_obj_t *scr = now[at];
   if (scr == scrWeigh) refreshWeigh();
   if (scr == scrReceipt) paintReceipt();
@@ -1357,6 +1495,7 @@ void uiLoop() {
     toast(T(S_NO_ANSWER), false);
     if (lv_scr_act() == scrSeg) paintSeg();
     if (lv_scr_act() == scrSort) paintSort();
+    if (lv_scr_act() == scrCompost) paintCompostForm();
   }
   if (pinAskedAt && millis() - pinAskedAt > 8000) {   // the PC never answered the PIN (SapulMRF hashes it slowly)
     pinAskedAt = 0;

@@ -298,7 +298,7 @@ def op_request(do, m):
     if do == "compost_start":
         return "POST", "/compost/batches", {"start_kg": float(m["kg"]), "sensor_id": None}, None
     if do in ("compost_log", "compost_finish"):
-        body = ({"type": "inspection", "finished_kg": float(m["kg"])} if do == "compost_finish" else {"type": m.get("type")})
+        body = ({"type": "inspection", "finished_kg": float(m["kg"])} if do == "compost_finish" else {"type": m.get("activity")})  # "type" is the message type
         if body["type"] not in ("turning", "watering", "inspection"):
             raise ValueError(f"unknown compost activity {body['type']!r}")
         return "POST", f"/compost/batches/{int(m['batch_id'])}/activities", body, None
