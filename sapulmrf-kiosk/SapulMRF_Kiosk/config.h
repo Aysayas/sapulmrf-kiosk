@@ -36,13 +36,14 @@
 // --- Video box (must match FRAME_W/FRAME_H in kiosk_bridge.py) ---
 #define FRAME_W 480
 #define FRAME_H 360
+#define PHOTO_W 320    // camera-review photo (must match PHOTO_W/PHOTO_H in kiosk_bridge.py)
+#define PHOTO_H 180
 
 // --- Kiosk behaviour ---
 #define RECEIPT_RETURN_S   10     // receipt screen -> welcome
 #define IDLE_RETURN_MS     90000  // any screen idle this long -> welcome
 #define NUM_PUROKS         7
-#define KIOSK_PIN          "1234"  // operator PIN used when the camera PC is offline
-                                   // (when the PC is connected, its OPERATOR_PINS decide)
+#define OP_IDLE_MS         300000 // an operator's screen idle this long -> Lock (SapulMRF ends the session at 30 min)
 
 // --- Optional load-cell scale (HX711). 0 = weight entered on the keypad ---
 #define USE_HX711          0

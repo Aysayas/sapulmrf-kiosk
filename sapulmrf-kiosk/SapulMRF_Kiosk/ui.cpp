@@ -1,4 +1,5 @@
-// The kiosk's screens: Welcome -> Purok -> Scan -> Weigh -> Receipt for residents, PIN -> Operator for staff.
+// The kiosk's screens: Welcome -> Purok -> Scan -> Weigh -> Receipt for residents; for MRF operators, their name ->
+// their own PIN -> operator home (Today, Camera review, Segregation, Sort into storage).
 // English / Tagalog, switchable on every screen; the language goes back to the default after each drop-off.
 #include "ui.h"
 
@@ -19,9 +20,12 @@ enum Str {
   S_KIND_Q, S_WEIGHT_Q, S_WEIGHT_KG, S_FROM_CAMERA, S_YOU_CHOSE, S_FROM_SCALE, S_CONFIRM, S_ENTER_WEIGHT, S_PC_OFFLINE,
   S_THANKS, S_SAVED, S_SENDING, S_OFFLINE_T, S_OFFLINE, S_NOT_SAVED_T, S_NOT_SAVED, S_CODE, S_WEIGHT, S_KIND,
   S_BIN, S_COUNTER, S_DONE, S_RETURN,
-  S_OP_MODE, S_OP_PIN, S_CLEAR, S_ENTER, S_PIN_4, S_CHECKING, S_WRONG_PIN, S_NO_ANSWER, S_PC_OFF_PIN, S_BACK_DROP,
-  S_RECORDS, S_RECORDS_SUB, S_REFRESH, S_LOCK, S_PC_OFF_TABLE,
-  S_PICK_KIND, S_CHANGE, S_NO_ROWS, S_FLOW1, S_FLOW2, S_FLOW3, S_RECORDING_T,
+  S_OP_MODE, S_OP_PIN, S_ENTER, S_PIN_4, S_CHECKING, S_WRONG_PIN, S_NO_ANSWER, S_BACK_DROP, S_LOCK,
+  S_PICK_KIND, S_CHANGE, S_FLOW1, S_FLOW2, S_FLOW3, S_RECORDING_T,
+  S_WHO, S_NO_OPS, S_NEED_PC, S_LOADING, S_HI, S_T_TODAY, S_T_REVIEW, S_T_SEG, S_T_SORT,
+  S_DROPS, S_KG_TODAY, S_TO_SEG, S_STORAGE, S_N_OF, S_SURE, S_KEEP, S_NOT_RECYC, S_NO_REVIEW, S_NO_PHOTO,
+  S_PICK_MAT, S_PICK_AREA, S_WAIT_SEG, S_WAIT_SORT, S_NO_WAITING, S_SEGREGATED, S_MIXED_C, S_WET, S_DRY, S_KG_F, S_BAGS,
+  S_SAVE, S_SAVING, S_SAVED_OK, S_SIGNED_OUT, S_RESIDUAL_M,
   S_COUNT
 };
 static const char *const WORDS[S_COUNT][2] = {
@@ -71,27 +75,56 @@ static const char *const WORDS[S_COUNT][2] = {
   {"Done", "Tapos na"},
   {"Back to start: %d s", "Pabalik sa simula: %d s"},
   {"STAFF MODE", "PARA SA KAWANI"},
-  {"Enter your\n4-digit PIN", "Ilagay ang\n4-digit na PIN"},
-  {"Clear", "Burahin"},
+  {"Enter your PIN", "Ilagay ang iyong PIN"},
   {"Enter", "Pasok"},
-  {"Enter all 4 digits", "Ilagay ang 4 na numero"},
+  {"Enter 4 to 6 digits", "Ilagay ang 4 hanggang 6 na numero"},
   {"Checking...", "Sinusuri..."},
   {"Wrong PIN, try again", "Mali ang PIN, subukan muli"},
   {"No answer from the camera PC. Try again.", "Walang sagot ang camera PC. Subukan muli."},
-  {"Wrong PIN (camera PC offline)", "Mali ang PIN (offline ang camera PC)"},
   {"Back to drop-off", "Bumalik sa drop-off"},
-  {"Recent drop-offs", "Mga huling nagdala"},
-  {"Newest first, from SapulMRF", "Pinakabago muna, mula sa SapulMRF"},
-  {LV_SYMBOL_REFRESH "  Refresh", LV_SYMBOL_REFRESH "  I-refresh"},
   {LV_SYMBOL_CLOSE "  Lock", LV_SYMBOL_CLOSE "  I-lock"},
-  {"Camera PC offline", "Offline ang camera PC"},
   {"Choose the kind  " LV_SYMBOL_RIGHT, "Pumili ng uri  " LV_SYMBOL_RIGHT},
   {"Change", "Palitan"},
-  {"No drop-offs yet", "Wala pang nagdala"},
   {"Purok", "Purok"},
   {"Camera", "Camera"},
   {"Weight", "Timbang"},
   {"Recording...", "Itinatala..."},
+  {"Who is signing in?", "Sino ang papasok?"},
+  {"No operator has a kiosk PIN yet. Set one on the SapulMRF website: Profile, then Kiosk PIN.",
+   "Wala pang operator na may kiosk PIN. Gumawa sa SapulMRF website: Profile, tapos Kiosk PIN."},
+  {"Staff sign-in needs the camera PC and SapulMRF.", "Kailangan ng camera PC at SapulMRF para makapasok ang kawani."},
+  {"Loading...", "Kinukuha..."},
+  {"Hi, %s", "Kumusta, %s"},
+  {"Today", "Ngayon"},
+  {"Camera review", "Suriin ang camera"},
+  {"Segregation", "Segregasyon"},
+  {"Sort into storage", "Ilagay sa imbakan"},
+  {"drop-offs today", "nagdala ngayon"},
+  {"kg today", "kg ngayon"},
+  {"to check", "susuriin"},
+  {"Storage", "Imbakan"},
+  {"1 of %d waiting", "1 sa %d naghihintay"},
+  {"%d%% sure", "%d%% sigurado"},
+  {LV_SYMBOL_OK "  Keep", LV_SYMBOL_OK "  Tama"},
+  {"Not recyclable", "Hindi nare-recycle"},
+  {"Nothing to review. Every camera suggestion is checked.", "Wala nang susuriin. Natingnan na lahat ng mungkahi ng camera."},
+  {"No photo", "Walang litrato"},
+  {"Which material is it?", "Anong materyal ito?"},
+  {"Which storage area?", "Saang imbakan?"},
+  {"Pick a drop-off to check", "Pumili ng susuriing drop-off"},
+  {"Pick a drop-off to sort", "Pumili ng isosort na drop-off"},
+  {"Nothing waiting.", "Walang naghihintay."},
+  {"Segregated", "Nakahiwalay"},
+  {"Mixed", "Halo-halo"},
+  {"Wet kg", "Basa kg"},
+  {"Dry kg", "Tuyo kg"},
+  {"kg", "kg"},
+  {"Bags", "Sako"},
+  {"Save", "I-save"},
+  {"Saving...", "Sine-save..."},
+  {"Saved", "Na-save"},
+  {"You were signed out.", "Na-sign out ka."},
+  {"Residual", "Di-nabubulok"},
 };
 static int lang = DEFAULT_LANG;
 static const char *T(Str s) { return WORDS[s][lang]; }
@@ -123,22 +156,25 @@ static bool afterDropOff = false;      // going home from a receipt resets the l
 
 // screens and the widgets that change
 static lv_obj_t *scrHome, *scrPurok, *scrScan, *scrPick, *scrWeigh, *scrReceipt, *scrPin, *scrOp;
+static lv_obj_t *scrList, *scrToday, *scrReview, *scrSeg, *scrSort;   // staff: chooser, today, camera review, forms
 static lv_obj_t *lblToday, *alertBox, *lblAlert;
 static lv_obj_t *hintBar, *lblHint;
 static lv_obj_t *imgVideo, *lblVideoWait, *lblLive, *frameRing, *gotBar, *lblGot, *lblScanStatus, *barSteady;
 static lv_obj_t *lblCount[3];
 static lv_obj_t *chipPurok, *chipCat, *lblWeight, *btnConfirm, *kpWeight;
 static lv_obj_t *rcBand, *rcIcon, *rcTitle, *rcSub, *lblCode, *rcWeight, *rcKind, *rcPurok, *rcBin, *lblBin, *barCountdown, *lblCountdown;
-static lv_obj_t *pinDots[4], *lblPinMsg, *tblRecent, *lblNoRows, *opAlert, *lblOpAlert, *scanTile[3];
+static lv_obj_t *pinDots[6], *lblPinMsg, *lblPinName, *opAlert, *lblOpAlert, *scanTile[3];
 // status strip (lv_layer_top: survives rebuilding the screens)
-static lv_obj_t *statusDot, *batPill, *lblBat, *langBtn[2];
-static lv_timer_t *receiptTimer = nullptr, *freezeTimer = nullptr;
+static lv_obj_t *statusDot, *batPill, *lblBat, *langBtn[2], *toastBox, *lblToast;
+static lv_timer_t *receiptTimer = nullptr, *freezeTimer = nullptr, *toastTimer = nullptr;
 static String lastAlert = "", lastNet = "", lastIp = "";
 static int lastAlertMore = -1;
 static char todayText[96] = "";
 
 void goTo(lv_obj_t *scr);
 static void buildAll(int show = -1);
+static void enterStaff(lv_obj_t *scr, lv_obj_t *cur);
+static bool isStaff(lv_obj_t *s);
 
 // ------------------------------------------------------------ components
 static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h, uint32_t bg, int radius = 0) {
@@ -272,6 +308,23 @@ static void buildStatusStrip() {
   lblBat = text(batPill, "", &atk_r18, T_INK);
   lv_obj_center(lblBat);
   lv_obj_add_flag(batPill, LV_OBJ_FLAG_HIDDEN);
+  toastBox = box(top, T_MARGIN, 60, 800 - 2 * T_MARGIN, 52, T_OK, 12);   // SapulMRF's answer to a save
+  lblToast = text(toastBox, "", &atk_b24, 0xFFFFFF, 16, 0, 800 - 2 * T_MARGIN - 32);
+  lv_label_set_long_mode(lblToast, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(lblToast, 30);
+  lv_obj_align(lblToast, LV_ALIGN_LEFT_MID, 16, 0);
+  lv_obj_add_flag(toastBox, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void toastHide(lv_timer_t *) { lv_obj_add_flag(toastBox, LV_OBJ_FLAG_HIDDEN); toastTimer = nullptr; }
+
+static void toast(const char *s, bool ok) {
+  lv_label_set_text(lblToast, s);
+  lv_obj_set_style_bg_color(toastBox, lv_color_hex(ok ? T_OK : T_ERR), 0);
+  lv_obj_clear_flag(toastBox, LV_OBJ_FLAG_HIDDEN);
+  if (toastTimer) lv_timer_del(toastTimer);
+  toastTimer = lv_timer_create(toastHide, ok ? 2500 : 6000, nullptr);   // errors stay long enough to read
+  lv_timer_set_repeat_count(toastTimer, 1);
 }
 
 void uiSetLight(const char *c) {
@@ -288,7 +341,8 @@ void uiSetBattery(const char *s, uint32_t color, bool visible) {
 
 // ------------------------------------------------------------ Welcome
 static void onStart(lv_event_t *) { goTo(scrPurok); }
-static void onStaff(lv_event_t *) { goTo(scrPin); }
+static void openStaff();
+static void onStaff(lv_event_t *) { openStaff(); }
 
 static void buildHome() {
   scrHome = screen();
@@ -649,33 +703,154 @@ void uiOnReceipt(JsonDocument &d) {
   }
 }
 
-// ------------------------------------------------------------ Staff PIN
+// ------------------------------------------------------------ Staff: each operator signs in with their own PIN
+// The PC checks the PIN with SapulMRF and keeps that session. Every save below is a normal SapulMRF call as this
+// operator, so the website's rules, approvals and Activity log apply; the kiosk shows what SapulMRF answers.
+#define MAX_ITEMS 8
+struct Item { int id; String label; };
+static Item ops[MAX_ITEMS], mats[MAX_ITEMS], areas[MAX_ITEMS], waits[MAX_ITEMS];
+static int nOps = 0, nMats = 0, nAreas = 0, nWaits = 0;
+struct Sugg { int id; String name; int pct; int did; };
+static Sugg sugg[MAX_ITEMS];
+static int nSugg = 0, suggTotal = 0;
+static bool signedIn = false, busy = false;   // busy: a save is on its way, buttons wait for SapulMRF
+static uint32_t busySince = 0;
+static String opName = "";
+enum ListKind { L_NAMES, L_SEG, L_SORT, L_SORT_MAT, L_SORT_AREA, L_REVIEW_MAT };
+static ListKind listKind = L_NAMES;
+static int selOp = -1, selWait = -1, selMat = -1, selArea = -1;   // selMat == nMats: residual
+static bool listLoading = false;
+static int segCond = -1;                       // 0 segregated, 1 mixed
+uint16_t *uiPhotoBuf = nullptr;
+static lv_img_dsc_t photoDsc;
+
+static bool isOpScreen(lv_obj_t *s) {
+  return s == scrOp || s == scrToday || s == scrReview || s == scrSeg || s == scrSort || (s == scrList && listKind != L_NAMES);
+}
+
+static void opAsk(const char *what) { JsonDocument d; d["type"] = "op"; d["do"] = what; wsSend(d); }
+
+static void setBusy(bool b) { busy = b; busySince = b ? millis() : 0; }
+
+static void lockNow() {
+  if (signedIn) { JsonDocument d; d["type"] = "lock"; wsSend(d); }
+  signedIn = false; opName = ""; setBusy(false);
+}
+
+static void choose(ListKind k) { listKind = k; goTo(scrList); }
+static void openStaff() { choose(L_NAMES); }
+
+// ---- the chooser: operator names, waiting drop-offs, materials, storage areas
+static lv_obj_t *listBox, *lblListTitle, *lblListMsg;
+
+static void onListItem(lv_event_t *e) {
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  switch (listKind) {
+    case L_NAMES: selOp = i; goTo(scrPin); break;
+    case L_SEG: selWait = i; segCond = -1; goTo(scrSeg); break;
+    case L_SORT: selWait = i; choose(L_SORT_MAT); break;
+    case L_SORT_MAT: selMat = i; choose(L_SORT_AREA); break;
+    case L_SORT_AREA: selArea = i; goTo(scrSort); break;
+    case L_REVIEW_MAT: {
+      if (busy || !nSugg) return;
+      JsonDocument d; d["type"] = "op"; d["do"] = "confirm"; d["id"] = sugg[0].id; d["material_id"] = mats[i].id;
+      wsSend(d); setBusy(true); goTo(scrReview); break;
+    }
+  }
+}
+
+static void onListBack(lv_event_t *) {
+  switch (listKind) {
+    case L_NAMES: goTo(scrHome); break;
+    case L_SORT_MAT: choose(L_SORT); break;
+    case L_SORT_AREA: choose(L_SORT_MAT); break;
+    case L_REVIEW_MAT: goTo(scrReview); break;
+    default: goTo(scrOp);
+  }
+}
+
+static void paintList() {
+  lv_obj_clean(listBox);
+  Item *items = listKind == L_NAMES ? ops : (listKind == L_SEG || listKind == L_SORT) ? waits
+              : listKind == L_SORT_AREA ? areas : mats;
+  int n = listKind == L_NAMES ? nOps : (listKind == L_SEG || listKind == L_SORT) ? nWaits
+        : listKind == L_SORT_AREA ? nAreas : nMats;
+  bool residual = listKind == L_SORT_MAT;      // sorting can also store residual, which isn't a material
+  bool drops = listKind == L_SEG || listKind == L_SORT;
+  for (int i = 0; i < n + (residual ? 1 : 0); i++) {
+    const char *s = i < n ? items[i].label.c_str() : T(S_RESIDUAL_M);
+    button(listBox, s, (i % 2) * 376, (i / 2) * 70, 360, 60, T_CARD, T_INK, drops ? &atk_r18 : &atk_b24, onListItem,
+           (void *)(intptr_t)i, T_LINE);
+  }
+  bool empty = n == 0 && !residual;
+  if (!empty) lv_obj_add_flag(lblListMsg, LV_OBJ_FLAG_HIDDEN);
+  else {
+    lv_label_set_text(lblListMsg, listLoading ? T(S_LOADING) : listKind == L_NAMES ? T(S_NO_OPS) : T(S_NO_WAITING));
+    lv_obj_clear_flag(lblListMsg, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+static void enterList() {
+  static const Str titles[] = {S_WHO, S_WAIT_SEG, S_WAIT_SORT, S_PICK_MAT, S_PICK_AREA, S_PICK_MAT};
+  lv_label_set_text(lblListTitle, T(titles[listKind]));
+  listLoading = true;
+  if (listKind == L_NAMES || listKind == L_SEG || listKind == L_SORT) {
+    if (listKind == L_NAMES) nOps = 0; else nWaits = 0;
+    if (!pcUp) { listLoading = false; paintList(); lv_label_set_text(lblListMsg, T(S_NEED_PC)); return; }
+    if (listKind == L_NAMES) { JsonDocument d; d["type"] = "operators"; wsSend(d); }
+    else { JsonDocument d; d["type"] = "op"; d["do"] = "waiting"; d["for"] = listKind == L_SORT ? "sorting" : "segregation"; wsSend(d); }
+  } else if (listKind == L_SORT_AREA ? !nAreas : !nMats) {
+    opAsk(listKind == L_SORT_AREA ? "areas" : "materials");
+  } else listLoading = false;
+  paintList();
+}
+
+static void buildList() {
+  scrList = screen();
+  lblListTitle = text(scrList, "", &atk_b32, T_INK, T_MARGIN, 64);
+  listBox = box(scrList, T_MARGIN, 116, 800 - 2 * T_MARGIN, 4 * 70, T_BG, 0);
+  lblListMsg = text(scrList, "", &atk_r24, T_INK2, T_MARGIN, 140, 800 - 2 * T_MARGIN);
+  button(scrList, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onListBack, nullptr, T_LINE);
+}
+
+void uiOnOperators(JsonDocument &d) {
+  nOps = 0;
+  for (JsonObject o : d["items"].as<JsonArray>()) {
+    if (nOps == MAX_ITEMS) break;
+    ops[nOps++] = {o["id"] | 0, String((const char *)(o["name"] | ""))};
+  }
+  if (lv_scr_act() != scrList || listKind != L_NAMES) return;
+  listLoading = false;
+  paintList();
+  const char *err = d["error"] | "";
+  if (!nOps && *err) lv_label_set_text(lblListMsg, err);
+}
+
+// ---- PIN: 4 to 6 digits, checked by SapulMRF (5 wrong tries lock that operator for 5 minutes)
 static void refreshPin() {
-  for (int i = 0; i < 4; i++)
+  for (int i = 0; i < 6; i++)
     lv_obj_set_style_bg_opa(pinDots[i], i < (int)pinEntry.length() ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
 }
 
 static void onPinKey(lv_event_t *e) {
   lv_obj_t *m = lv_event_get_target(e);
   const char *k = lv_btnmatrix_get_btn_text(m, lv_btnmatrix_get_selected_btn(m));
-  if (!k) return;
+  if (!k || pinAskedAt) return;              // one check at a time
   lv_label_set_text(lblPinMsg, "");
   if (!strcmp(k, LV_SYMBOL_BACKSPACE)) { if (pinEntry.length()) pinEntry.remove(pinEntry.length() - 1); }
   else if (!strcmp(k, T(S_ENTER))) {
-    if (pinEntry.length() != 4) lv_label_set_text(lblPinMsg, T(S_PIN_4));
-    else if (pcUp) {                       // the PC checks it
-      JsonDocument d; d["type"] = "pin"; d["pin"] = pinEntry; wsSend(d);
+    if (pinEntry.length() < 4) lv_label_set_text(lblPinMsg, T(S_PIN_4));
+    else if (!pcUp || selOp < 0) lv_label_set_text(lblPinMsg, T(S_NEED_PC));
+    else {
+      JsonDocument d; d["type"] = "pin"; d["user_id"] = ops[selOp].id; d["pin"] = pinEntry; wsSend(d);
       lv_label_set_text(lblPinMsg, T(S_CHECKING));
       pinAskedAt = millis();
-    } else if (pinEntry == KIOSK_PIN) {    // PC offline: the kiosk's own PIN
-      lv_table_set_row_cnt(tblRecent, 2);
-      lv_table_set_cell_value(tblRecent, 1, 0, "-");
-      lv_table_set_cell_value(tblRecent, 1, 3, T(S_PC_OFF_TABLE));
-      goTo(scrOp);
-    } else { pinEntry = ""; lv_label_set_text(lblPinMsg, T(S_PC_OFF_PIN)); }
-  } else if (pinEntry.length() < 4) pinEntry += k;
+    }
+  } else if (pinEntry.length() < 6) pinEntry += k;
   refreshPin();
 }
+
+static void onPinBack(lv_event_t *) { choose(L_NAMES); }
 
 static void buildPin() {
   static const char *pmap[2][16] = {
@@ -684,71 +859,374 @@ static void buildPin() {
   scrPin = screen();
   lv_obj_t *side = box(scrPin, 24, 64, 336, 392, T_BRAND, 24);
   text(side, T(S_OP_MODE), &atk_r18, 0xC9DDD0, 28, 28);
-  text(side, T(S_OP_PIN), &atk_b32, 0xFFFFFF, 28, 60, 290);
-  for (int i = 0; i < 4; i++) {
-    pinDots[i] = box(side, 28 + i * 48, 172, 30, 30, 0xFFFFFF, LV_RADIUS_CIRCLE);
+  lblPinName = text(side, "", &atk_b32, 0xFFFFFF, 28, 56, 290);
+  lv_label_set_long_mode(lblPinName, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(lblPinName, 44);
+  text(side, T(S_OP_PIN), &atk_r24, 0xDCEFE2, 28, 108, 290);
+  for (int i = 0; i < 6; i++) {
+    pinDots[i] = box(side, 28 + i * 46, 160, 30, 30, 0xFFFFFF, LV_RADIUS_CIRCLE);
     lv_obj_set_style_border_width(pinDots[i], 3, 0);
     lv_obj_set_style_border_color(pinDots[i], lv_color_hex(0x9FBBA9), 0);
   }
-  lblPinMsg = text(side, "", &atk_r18, 0xFFC9C0, 28, 220, 290);
-  button(side, T(S_BACK_DROP), 28, 300, 280, T_TAP, T_BRAND, 0xFFFFFF, &atk_b24, onBackHome, nullptr, 0x5E8C70);
+  lblPinMsg = text(side, "", &atk_r18, 0xFFC9C0, 28, 210, 290);
+  button(side, T(S_BACK), 28, 300, 280, T_TAP, T_BRAND, 0xFFFFFF, &atk_b24, onPinBack, nullptr, 0x5E8C70);
   lv_obj_t *kp = keypad(scrPin, pmap[lang], 384, 64, 392, 392, onPinKey);
   lv_obj_set_style_text_font(kp, &atk_b32, LV_PART_ITEMS);
 }
 
-// ------------------------------------------------------------ Staff: recent drop-offs
-static void onOpLock(lv_event_t *) { JsonDocument d; d["type"] = "lock"; wsSend(d); goTo(scrHome); }
-static void onOpRefresh(lv_event_t *) { JsonDocument d; d["type"] = "recent"; wsSend(d); }
-static lv_obj_t *lblNetLine, *lblIpLine;
+void uiOnAuth(JsonDocument &d) {
+  pinAskedAt = 0;
+  if (d["ok"] | false) {
+    signedIn = true;
+    opName = (const char *)(d["name"] | "");
+    nMats = nAreas = 0;
+    opAsk("materials"); opAsk("areas");       // for camera review and sorting
+    goTo(scrOp);
+    return;
+  }
+  pinEntry = ""; refreshPin();
+  const char *err = d["error"] | "";
+  lv_label_set_text(lblPinMsg, !*err || !strcmp(err, "Wrong PIN.") ? T(S_WRONG_PIN) : err);   // lockout: SapulMRF says how long
+}
+
+// ---- operator home
+static lv_obj_t *lblHi, *lblNetLine, *lblIpLine;
+static void onOpLock(lv_event_t *) { goTo(scrHome); }   // goTo signs out when leaving the staff screens
+static void onTile(lv_event_t *e) {
+  switch ((int)(intptr_t)lv_event_get_user_data(e)) {
+    case 0: goTo(scrToday); break;
+    case 1: goTo(scrReview); break;
+    case 2: choose(L_SEG); break;
+    default: choose(L_SORT);
+  }
+}
 
 static void buildOperator() {
   scrOp = screen();
-  text(scrOp, T(S_RECORDS), &atk_b32, T_INK, T_MARGIN, 64);
-  text(scrOp, T(S_RECORDS_SUB), &atk_r18, T_INK2, T_MARGIN, 106);
-  lblNetLine = text(scrOp, lastNet.c_str(), &atk_r18, T_INK2, 420, 72, 348);
-  lblIpLine = text(scrOp, lastIp.c_str(), &atk_r18, T_INK2, 420, 96, 348);
-  opAlert = box(scrOp, T_MARGIN, 134, 800 - 2 * T_MARGIN, 40, T_WARN_BG, 10);
+  lblHi = text(scrOp, "", &atk_b32, T_INK, T_MARGIN, 64, 520);
+  lv_label_set_long_mode(lblHi, LV_LABEL_LONG_DOT);
+  lv_obj_set_height(lblHi, 44);
+  opAlert = box(scrOp, T_MARGIN, 112, 800 - 2 * T_MARGIN, 40, T_WARN_BG, 10);
   lblOpAlert = text(opAlert, "", &atk_r18, T_WARN, 14, 0, 800 - 2 * T_MARGIN - 28);
   lv_label_set_long_mode(lblOpAlert, LV_LABEL_LONG_DOT);
   lv_obj_set_height(lblOpAlert, 24);
   lv_obj_align(lblOpAlert, LV_ALIGN_LEFT_MID, 14, 0);
   lv_obj_add_flag(opAlert, LV_OBJ_FLAG_HIDDEN);
-  tblRecent = lv_table_create(scrOp);
-  lv_obj_set_pos(tblRecent, T_MARGIN, 184);
-  lv_obj_set_size(tblRecent, 800 - 2 * T_MARGIN, 208);
-  lv_table_set_col_cnt(tblRecent, 5);
-  const int cw[5] = {128, 120, 120, 220, 144};
-  const char *hd[5][2] = {{"Code", "Code"}, {"Time", "Oras"}, {"Purok", "Purok"}, {"Kind", "Uri"}, {"Weight", "Timbang"}};
-  for (int i = 0; i < 5; i++) { lv_table_set_col_width(tblRecent, i, cw[i]); lv_table_set_cell_value(tblRecent, 0, i, hd[i][lang]); }
-  lv_obj_set_style_text_font(tblRecent, &atk_r18, LV_PART_ITEMS);
-  lv_obj_set_style_pad_ver(tblRecent, 8, LV_PART_ITEMS);
-  lv_obj_set_style_border_color(tblRecent, lv_color_hex(T_LINE), 0);
-  lv_obj_set_style_radius(tblRecent, 14, 0);
-  lblNoRows = text(scrOp, T(S_NO_ROWS), &atk_r24, T_INK2);
-  lv_obj_align_to(lblNoRows, tblRecent, LV_ALIGN_CENTER, 0, 16);
-  button(scrOp, T(S_LOCK), T_MARGIN, 404, 220, T_TAP, T_CARD, T_INK, &atk_b24, onOpLock, nullptr, T_LINE);
-  button(scrOp, T(S_REFRESH), 800 - T_MARGIN - 220, 404, 220, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b24, onOpRefresh);
-}
-
-void uiOnAuth(JsonDocument &d) {
-  pinAskedAt = 0;
-  if (d["ok"] | false) { onOpRefresh(nullptr); goTo(scrOp); }
-  else { pinEntry = ""; refreshPin(); lv_label_set_text(lblPinMsg, T(S_WRONG_PIN)); }
-}
-
-void uiOnRecent(JsonDocument &d) {
-  JsonArray rows = d["rows"];
-  lv_table_set_row_cnt(tblRecent, rows.size() + 1);
-  if (rows.size()) lv_obj_add_flag(lblNoRows, LV_OBJ_FLAG_HIDDEN); else lv_obj_clear_flag(lblNoRows, LV_OBJ_FLAG_HIDDEN);
-  int r = 1;
-  for (JsonObject o : rows) {
-    lv_table_set_cell_value(tblRecent, r, 0, o["code"] | "");
-    lv_table_set_cell_value(tblRecent, r, 1, o["time"] | "");
-    lv_table_set_cell_value(tblRecent, r, 2, o["purok"] | "");
-    lv_table_set_cell_value(tblRecent, r, 3, o["cat"] | "");
-    lv_table_set_cell_value(tblRecent, r, 4, o["kg"] | "");
-    r++;
+  const Str tiles[4] = {S_T_TODAY, S_T_REVIEW, S_T_SEG, S_T_SORT};
+  const char *icons[4] = {LV_SYMBOL_LIST, LV_SYMBOL_EYE_OPEN, LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE};
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t *b = button(scrOp, "", T_MARGIN + (i % 2) * 376, 164 + (i / 2) * 112, 360, 100, i ? T_CARD : T_PRIMARY,
+                         i ? T_INK : 0xFFFFFF, &atk_b32, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
+    lv_label_set_text_fmt(lv_obj_get_child(b, 0), "%s  %s", icons[i], T(tiles[i]));
   }
+  button(scrOp, T(S_LOCK), T_MARGIN, 404, 220, T_TAP, T_CARD, T_INK, &atk_b24, onOpLock, nullptr, T_LINE);
+}
+
+// ---- Today: SapulMRF's numbers and how full storage is
+static lv_obj_t *lblStat[3], *areaRow[4], *areaName[4], *areaBar[4], *areaPct[4];
+
+static void onToOp(lv_event_t *) { goTo(scrOp); }
+
+static void buildToday() {
+  scrToday = screen();
+  text(scrToday, T(S_T_TODAY), &atk_b32, T_INK, T_MARGIN, 64);
+  const Str caps[3] = {S_DROPS, S_KG_TODAY, S_TO_SEG};
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t *c = box(scrToday, T_MARGIN + i * 248, 112, 232, 108, T_CARD, 16);
+    lv_obj_set_style_border_width(c, 2, 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(T_LINE), 0);
+    lblStat[i] = text(c, "-", &atk_b48, T_INK, 18, 8);
+    text(c, T(caps[i]), &atk_r18, T_INK2, 18, 70);
+  }
+  text(scrToday, T(S_STORAGE), &atk_b24, T_INK, T_MARGIN, 232);
+  for (int i = 0; i < 4; i++) {
+    areaRow[i] = box(scrToday, T_MARGIN, 268 + i * 32, 800 - 2 * T_MARGIN, 28, T_BG, 0);
+    areaName[i] = text(areaRow[i], "", &atk_r18, T_INK, 0, 2);
+    areaBar[i] = progress(areaRow[i], 220, 8, 400, 12, T_PRIMARY);
+    areaPct[i] = text(areaRow[i], "", &atk_b24, T_INK);
+    lv_obj_align(areaPct[i], LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN);
+  }
+  lblNetLine = text(scrToday, lastNet.c_str(), &atk_r18, T_INK2, 240, 408, 520);
+  lblIpLine = text(scrToday, lastIp.c_str(), &atk_r18, T_INK2, 240, 432, 520);
+  button(scrToday, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onToOp, nullptr, T_LINE);
+}
+
+static void paintToday(JsonObject o) {
+  char k[16]; fmtKg(k, sizeof k, o["kg"] | 0.0f);
+  lv_label_set_text_fmt(lblStat[0], "%d", (int)(o["drops"] | 0));
+  lv_label_set_text(lblStat[1], k);
+  lv_label_set_text_fmt(lblStat[2], "%d", (int)(o["segregate"] | 0));
+  JsonArray a = o["areas"];
+  for (int i = 0; i < 4; i++) {
+    if (i >= (int)a.size()) { lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN); continue; }
+    int pct = a[i]["pct"] | 0;
+    lv_label_set_text(areaName[i], a[i]["name"] | "");
+    lv_bar_set_value(areaBar[i], pct > 100 ? 100 : pct, LV_ANIM_OFF);
+    uint32_t col = pct > 100 ? T_ERR : pct >= 85 ? T_WARN : T_PRIMARY;   // over capacity is red, like the website
+    lv_obj_set_style_bg_color(areaBar[i], lv_color_hex(col), LV_PART_INDICATOR);
+    lv_label_set_text_fmt(areaPct[i], "%d%%", pct);
+    lv_obj_set_style_text_color(areaPct[i], lv_color_hex(pct > 100 ? T_ERR : T_INK), 0);
+    lv_obj_clear_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+// ---- Camera review: the photo, what the camera suggested, then Keep / Change / Not recyclable
+static lv_obj_t *imgPhoto, *lblNoPhoto, *lblRevCount, *lblRevName, *lblRevPct, *lblRevEmpty, *revBtn[3];
+
+static void sendConfirm(bool notRecyclable) {
+  if (busy || !nSugg) return;
+  JsonDocument d; d["type"] = "op"; d["do"] = "confirm"; d["id"] = sugg[0].id;
+  if (notRecyclable) d["not_recyclable"] = true;
+  wsSend(d); setBusy(true);
+}
+static void onKeep(lv_event_t *) { sendConfirm(false); }
+static void onNotRecyclable(lv_event_t *) { sendConfirm(true); }
+static void onReviewChange(lv_event_t *) { if (!busy && nSugg) choose(L_REVIEW_MAT); }
+
+static void paintReview() {
+  bool any = nSugg > 0;
+  for (int i = 0; i < 3; i++) {
+    if (any) lv_obj_clear_flag(revBtn[i], LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(revBtn[i], LV_OBJ_FLAG_HIDDEN);
+    if (busy) lv_obj_add_state(revBtn[i], LV_STATE_DISABLED); else lv_obj_clear_state(revBtn[i], LV_STATE_DISABLED);
+  }
+  setButtonText(revBtn[0], busy ? T(S_SAVING) : T(S_KEEP));
+  if (!any) {
+    lv_label_set_text(lblRevEmpty, listLoading ? T(S_LOADING) : T(S_NO_REVIEW));
+    lv_obj_clear_flag(lblRevEmpty, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(lblRevCount, ""); lv_label_set_text(lblRevName, ""); lv_label_set_text(lblRevPct, "");
+    lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_obj_add_flag(lblRevEmpty, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text_fmt(lblRevCount, T(S_N_OF), suggTotal);
+  lv_label_set_text(lblRevName, sugg[0].name.c_str());
+  lv_label_set_text_fmt(lblRevPct, T(S_SURE), sugg[0].pct);
+}
+
+static void buildReview() {
+  scrReview = screen();
+  lv_obj_t *ph = box(scrReview, 24, 64, PHOTO_W * 3 / 2, PHOTO_H * 3 / 2, T_VIDEO, 12);
+  imgPhoto = lv_img_create(ph);
+  lv_img_set_src(imgPhoto, &photoDsc);
+  lv_img_set_zoom(imgPhoto, 384);              // 320x180 shown at 1.5x
+  lv_obj_center(imgPhoto);
+  lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
+  lblNoPhoto = text(ph, T(S_LOADING), &atk_r24, 0xC9D3CC);
+  lv_obj_center(lblNoPhoto);
+  const int px = 24 + PHOTO_W * 3 / 2 + 24, pw = 800 - px - 24;
+  lblRevCount = text(scrReview, "", &atk_r18, T_INK2, px, 64, pw);
+  lblRevName = text(scrReview, "", &atk_b48, T_INK, px, 86, pw);
+  lblRevPct = text(scrReview, "", &atk_r24, T_INK2, px, 142, pw);
+  revBtn[0] = button(scrReview, T(S_KEEP), px, 184, pw, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b24, onKeep);
+  revBtn[1] = button(scrReview, T(S_CHANGE), px, 258, pw, T_TAP, T_CARD, T_INK, &atk_b24, onReviewChange, nullptr, T_LINE);
+  revBtn[2] = button(scrReview, T(S_NOT_RECYC), px, 332, pw, T_TAP, T_CARD, T_ERR, &atk_b24, onNotRecyclable, nullptr, T_LINE);
+  lblRevEmpty = text(scrReview, "", &atk_b24, T_INK2, px, 184, pw);
+  button(scrReview, T(S_BACK), T_MARGIN, 404, 180, T_TAP, T_CARD, T_INK, &atk_b24, onToOp, nullptr, T_LINE);
+}
+
+static void enterReview() {
+  listLoading = true;
+  opAsk("suggestions");
+  paintReview();
+}
+
+void uiOnPhoto(int deliveryId, bool ok) {
+  if (lv_scr_act() != scrReview || !nSugg || sugg[0].did != deliveryId) return;   // an older photo: ignore
+  if (ok) { lv_obj_clear_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN); lv_obj_invalidate(imgPhoto); }
+  else { lv_label_set_text(lblNoPhoto, T(S_NO_PHOTO)); lv_obj_clear_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN); }
+}
+
+static void askPhoto() {
+  lv_obj_add_flag(imgPhoto, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_clear_flag(lblNoPhoto, LV_OBJ_FLAG_HIDDEN);
+  if (!nSugg) return;
+  if (!sugg[0].did) { lv_label_set_text(lblNoPhoto, T(S_NO_PHOTO)); return; }
+  lv_label_set_text(lblNoPhoto, T(S_LOADING));
+  JsonDocument d; d["type"] = "photo"; d["delivery_id"] = sugg[0].did; wsSend(d);
+}
+
+// ---- Segregation and sorting forms: number fields typed on one keypad
+struct NumField { lv_obj_t *btn; String v; Str label; bool dec; };
+static NumField fWet = {nullptr, "", S_WET, true}, fDry = {nullptr, "", S_DRY, true};
+static NumField fKg = {nullptr, "", S_KG_F, true}, fBags = {nullptr, "", S_BAGS, false};
+static NumField *activeField = nullptr;
+static lv_obj_t *lblSegTitle, *btnCond[2], *btnSegSave, *lblSortTitle, *btnSortSave;
+
+static void paintField(NumField &f) {
+  if (!f.btn) return;
+  lv_label_set_text_fmt(lv_obj_get_child(f.btn, 0), "%s    %s", T(f.label), f.v.length() ? f.v.c_str() : "-");
+  bool on = activeField == &f;
+  lv_obj_set_style_border_width(f.btn, on ? 4 : 2, 0);
+  lv_obj_set_style_border_color(f.btn, lv_color_hex(on ? T_PRIMARY : T_LINE), 0);
+}
+
+static void paintSave(lv_obj_t *b, bool ready) {
+  bool ok = ready && !busy && pcUp;
+  if (ok) lv_obj_clear_state(b, LV_STATE_DISABLED); else lv_obj_add_state(b, LV_STATE_DISABLED);
+  lv_obj_set_style_text_color(lv_obj_get_child(b, 0), lv_color_hex(ok ? 0xFFFFFF : T_INK2), 0);
+  setButtonText(b, busy ? T(S_SAVING) : T(S_SAVE));
+}
+
+static void paintSeg() {
+  for (int i = 0; i < 2; i++) {
+    bool on = segCond == i;
+    lv_obj_set_style_bg_color(btnCond[i], lv_color_hex(on ? T_SOFT : T_CARD), 0);
+    lv_obj_set_style_border_color(btnCond[i], lv_color_hex(on ? T_PRIMARY : T_LINE), 0);
+    lv_obj_set_style_border_width(btnCond[i], on ? 4 : 2, 0);
+  }
+  paintField(fWet); paintField(fDry);
+  paintSave(btnSegSave, segCond >= 0 && fWet.v.toFloat() + fDry.v.toFloat() > 0);
+}
+
+static void paintSort() {
+  paintField(fKg); paintField(fBags);
+  paintSave(btnSortSave, fKg.v.toFloat() > 0);
+}
+
+static void onField(lv_event_t *e) {
+  activeField = (NumField *)lv_event_get_user_data(e);
+  if (lv_scr_act() == scrSeg) paintSeg(); else paintSort();
+}
+
+static void onFormKey(lv_event_t *e) {
+  lv_obj_t *m = lv_event_get_target(e);
+  const char *k = lv_btnmatrix_get_btn_text(m, lv_btnmatrix_get_selected_btn(m));
+  if (!k || !activeField) return;
+  String &v = activeField->v;
+  if (!strcmp(k, LV_SYMBOL_BACKSPACE)) { if (v.length()) v.remove(v.length() - 1); }
+  else if (!strcmp(k, ".")) { if (activeField->dec && v.indexOf('.') < 0) v += v.length() ? "." : "0."; }
+  else if (v.length() < 6) v += k;
+  if (lv_scr_act() == scrSeg) paintSeg(); else paintSort();
+}
+
+static void onCond(lv_event_t *e) { segCond = (int)(intptr_t)lv_event_get_user_data(e); paintSeg(); }
+static void onSegBack(lv_event_t *) { choose(L_SEG); }
+static void onSortBack(lv_event_t *) { choose(L_SORT_AREA); }
+
+static void onSegSave(lv_event_t *) {
+  if (busy || selWait < 0) return;
+  JsonDocument d; d["type"] = "op"; d["do"] = "segregate"; d["delivery_id"] = waits[selWait].id;
+  d["condition"] = segCond == 1 ? "mixed" : "segregated";
+  d["wet_kg"] = fWet.v.toFloat(); d["dry_kg"] = fDry.v.toFloat();
+  wsSend(d); setBusy(true); paintSeg();
+}
+
+static void onSortSave(lv_event_t *) {
+  if (busy || selWait < 0 || selArea < 0) return;
+  JsonDocument d; d["type"] = "op"; d["do"] = "sort"; d["delivery_id"] = waits[selWait].id;
+  if (selMat >= 0 && selMat < nMats) d["material_id"] = mats[selMat].id;   // none = residual
+  d["area_id"] = areas[selArea].id; d["kg"] = fKg.v.toFloat(); d["bags"] = fBags.v.toInt();
+  wsSend(d); setBusy(true); paintSort();
+}
+
+static const char *formKeys[] = {"1", "2", "3", "\n", "4", "5", "6", "\n", "7", "8", "9", "\n", ".", "0", LV_SYMBOL_BACKSPACE, ""};
+
+static lv_obj_t *fieldButton(lv_obj_t *parent, NumField &f, int y) {
+  f.btn = button(parent, "", T_MARGIN, y, 356, T_TAP, T_CARD, T_INK, &atk_b24, onField, &f, T_LINE);
+  return f.btn;
+}
+
+static void buildSeg() {
+  scrSeg = screen();
+  lblSegTitle = text(scrSeg, "", &atk_b24, T_INK, T_MARGIN, 66, 356);
+  btnCond[0] = button(scrSeg, T(S_SEGREGATED), T_MARGIN, 112, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCond, (void *)0, T_LINE);
+  btnCond[1] = button(scrSeg, T(S_MIXED_C), T_MARGIN + 184, 112, 172, T_TAP, T_CARD, T_INK, &atk_b24, onCond, (void *)1, T_LINE);
+  fieldButton(scrSeg, fWet, 196);
+  fieldButton(scrSeg, fDry, 270);
+  lv_obj_t *kp = keypad(scrSeg, formKeys, 420, 64, 356, 328, onFormKey);
+  lv_obj_set_style_text_font(kp, &atk_b48, LV_PART_ITEMS);
+  button(scrSeg, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onSegBack, nullptr, T_LINE);
+  btnSegSave = button(scrSeg, T(S_SAVE), T_MARGIN + 184, 404, 564, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onSegSave);
+}
+
+static void buildSort() {
+  scrSort = screen();
+  lblSortTitle = text(scrSort, "", &atk_b24, T_INK, T_MARGIN, 66, 356);
+  fieldButton(scrSort, fKg, 196);
+  fieldButton(scrSort, fBags, 270);
+  lv_obj_t *kp = keypad(scrSort, formKeys, 420, 64, 356, 328, onFormKey);
+  lv_obj_set_style_text_font(kp, &atk_b48, LV_PART_ITEMS);
+  button(scrSort, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onSortBack, nullptr, T_LINE);
+  btnSortSave = button(scrSort, T(S_SAVE), T_MARGIN + 184, 404, 564, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onSortSave);
+}
+
+static void enterForm(lv_obj_t *scr, lv_obj_t *cur) {
+  if (selWait < 0 || selWait >= nWaits) return;
+  if (scr == scrSeg) {
+    if (cur != scrSeg) { fWet.v = fDry.v = ""; activeField = &fWet; }
+    lv_label_set_text(lblSegTitle, waits[selWait].label.c_str());
+    paintSeg();
+  } else {
+    if (cur != scrSort) { fKg.v = fBags.v = ""; activeField = &fKg; }
+    const char *mat = selMat >= 0 && selMat < nMats ? mats[selMat].label.c_str() : T(S_RESIDUAL_M);
+    lv_label_set_text_fmt(lblSortTitle, "%s\n%s  " LV_SYMBOL_RIGHT "  %s", waits[selWait].label.c_str(), mat,
+                          selArea >= 0 ? areas[selArea].label.c_str() : "");
+    paintSort();
+  }
+}
+
+// ---- SapulMRF's answers, relayed by the PC
+static void fillItems(Item *items, int &n, JsonArray a, bool drop) {
+  n = 0;
+  for (JsonObject o : a) {
+    if (n == MAX_ITEMS) break;
+    items[n].id = o["id"] | 0;
+    if (drop) {                                  // "D-0123 · 3.5 kg" and "Purok 1 · Recyclable"
+      char k[16]; fmtKg(k, sizeof k, o["weight_kg"] | 0.0f);
+      items[n].label = String((const char *)(o["code"] | "")) + "  ·  " + k + " kg\n" + (const char *)(o["source_area"] | "")
+                     + "  ·  " + (const char *)(o["category"] | "");
+    } else items[n].label = (const char *)(o["name"] | "");
+    n++;
+  }
+}
+
+void uiOnOp(JsonDocument &d) {
+  const char *what = d["do"] | "";
+  bool ok = d["ok"] | false;
+  lv_obj_t *cur = lv_scr_act();
+  bool save = !strcmp(what, "confirm") || !strcmp(what, "segregate") || !strcmp(what, "sort");
+  if (save) setBusy(false);
+  if (d["signed_out"] | false) {                 // the session ended (30 minutes, or locked elsewhere)
+    signedIn = false;
+    if (isOpScreen(cur)) { toast(T(S_SIGNED_OUT), false); goTo(scrHome); }
+    return;
+  }
+  if (!ok) {
+    toast(d["error"] | "SapulMRF error", false);   // SapulMRF's own message, e.g. a full storage area
+    listLoading = false;
+    if (cur == scrList) paintList();
+    if (cur == scrReview) paintReview();
+    if (cur == scrSeg) paintSeg();
+    if (cur == scrSort) paintSort();
+    return;
+  }
+  if (save) {
+    toast(T(S_SAVED_OK), true);
+    if (!strcmp(what, "confirm")) { if (cur == scrReview) enterReview(); }
+    else if (!strcmp(what, "segregate")) choose(L_SEG);
+    else choose(L_SORT);
+    return;
+  }
+  if (!strcmp(what, "today")) { if (cur == scrToday) paintToday(d["data"].as<JsonObject>()); return; }
+  if (!strcmp(what, "suggestions")) {
+    nSugg = 0;
+    suggTotal = d["data"]["total"] | 0;
+    for (JsonObject o : d["data"]["items"].as<JsonArray>()) {
+      if (nSugg == MAX_ITEMS) break;
+      sugg[nSugg++] = {o["id"] | 0, String((const char *)(o["suggested"] | "")), o["pct"] | 0, o["delivery_id"] | 0};
+    }
+    listLoading = false;
+    if (cur == scrReview) { paintReview(); askPhoto(); }
+    return;
+  }
+  bool drop = !strcmp(what, "waiting");
+  if (drop) fillItems(waits, nWaits, d["data"].as<JsonArray>(), true);
+  else if (!strcmp(what, "materials")) fillItems(mats, nMats, d["data"].as<JsonArray>(), false);
+  else if (!strcmp(what, "areas")) fillItems(areas, nAreas, d["data"].as<JsonArray>(), false);
+  else return;
+  if (cur == scrList) { listLoading = false; paintList(); }
 }
 
 void uiSetNet(const char *line, const char *ip) {
@@ -766,9 +1244,26 @@ void uiSetPcUp(bool up) {
   if (lv_scr_act() == scrWeigh) refreshWeigh();
   if (!up && lv_scr_act() == scrReceipt && rcState == RC_SENDING) { rcState = RC_NOT_SAVED; paintReceipt(); }
   if (!up) uiSetLight("red");              // no PC = no SapulMRF: nothing can be recorded
+  if (!up) { signedIn = false; setBusy(false); }   // the PC signs the operator out when the link drops
+  if (!up && isOpScreen(lv_scr_act())) goTo(scrHome);
 }
 
 // ------------------------------------------------------------ navigation
+static bool isStaff(lv_obj_t *s) { return s == scrPin || s == scrList || isOpScreen(s); }
+
+// What a staff screen fetches or repaints when it shows (also after a language switch rebuilds it).
+static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
+  if (scr == scrPin) {
+    pinEntry = ""; pinAskedAt = 0; lv_label_set_text(lblPinMsg, ""); refreshPin();
+    lv_label_set_text(lblPinName, selOp >= 0 ? ops[selOp].label.c_str() : "");
+  }
+  if (scr == scrList) enterList();
+  if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); }
+  if (scr == scrToday) opAsk("today");
+  if (scr == scrReview) { if (cur == scrList) paintReview(); else enterReview(); }
+  if (scr == scrSeg || scr == scrSort) enterForm(scr, cur);
+}
+
 void goTo(lv_obj_t *scr) {
   lv_obj_t *cur = lv_scr_act();
   if (freezeTimer) { lv_timer_del(freezeTimer); freezeTimer = nullptr; }
@@ -810,34 +1305,40 @@ void goTo(lv_obj_t *scr) {
     }
     afterDropOff = false;
   }
-  if (scr == scrPin) { pinEntry = ""; lv_label_set_text(lblPinMsg, ""); refreshPin(); }
-  if (scr == scrOp) onOpRefresh(nullptr);
-  // The SapulMRF light is for staff; residents never see an unexplained red dot
-  if (scr == scrPin || scr == scrOp) lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
+  if (signedIn && !isOpScreen(scr)) lockNow();   // leaving the staff screens signs out (Lock, idle, Back)
+  enterStaff(scr, cur);
+  if (isStaff(scr)) lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_HIDDEN);   // residents never see an unexplained red dot
   else lv_obj_add_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
   lv_disp_trig_activity(nullptr);
+  if (scr == cur) return;                          // the chooser shows its next list in place
   lv_scr_load_anim(scr, LV_SCR_LOAD_ANIM_FADE_ON, 150, 0, false);
 }
 
 // Builds (or, after a language switch, rebuilds) every screen and shows the same step again.
 static void buildAll(int show) {
   lv_obj_t *cur = lv_scr_act();
-  lv_obj_t *old[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp};
+  lv_obj_t *old[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrToday,
+                     scrReview, scrSeg, scrSort};
+  const int N = sizeof old / sizeof old[0];
   int at = 0;
-  for (int i = 0; i < 8; i++) if (old[i] && old[i] == cur) at = i;
+  for (int i = 0; i < N; i++) if (old[i] && old[i] == cur) at = i;
   if (show >= 0) at = show;
+  for (NumField *f : {&fWet, &fDry, &fKg, &fBags}) f->btn = nullptr;
   buildHome(); buildPurok(); buildScan(); buildPick(); buildWeigh(); buildReceipt(); buildPin(); buildOperator();
+  buildList(); buildToday(); buildReview(); buildSeg(); buildSort();
   paintAlert();
   paintLang();
-  lv_obj_t *now[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp};
+  lv_obj_t *now[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrToday,
+                     scrReview, scrSeg, scrSort};
   lv_obj_t *scr = now[at];
   if (scr == scrWeigh) refreshWeigh();
   if (scr == scrReceipt) paintReceipt();
   if (scr == scrScan) frozen = false;
-  if (scr == scrPin || scr == scrOp) lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
+  enterStaff(scr, scr);                          // same screen: keep the form's values
+  if (isStaff(scr)) lv_obj_clear_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(statusDot, LV_OBJ_FLAG_HIDDEN);
   lv_scr_load(scr);
-  for (int i = 0; i < 8; i++) if (old[i]) lv_obj_del(old[i]);
+  for (int i = 0; i < N; i++) if (old[i]) lv_obj_del(old[i]);
   JsonDocument d; d["type"] = "stats"; wsSend(d);   // today's line again, in the new language
 }
 
@@ -850,33 +1351,53 @@ void uiBegin() {
   frameDsc.header.cf = LV_IMG_CF_TRUE_COLOR;
   frameDsc.data_size = FRAME_W * FRAME_H * 2;
   frameDsc.data = (const uint8_t *)uiFrameBuf;
+  uiPhotoBuf = (uint16_t *)ps_malloc(PHOTO_W * PHOTO_H * 2);
+  memset(uiPhotoBuf, 0, PHOTO_W * PHOTO_H * 2);
+  photoDsc.header.always_zero = 0;
+  photoDsc.header.w = PHOTO_W;
+  photoDsc.header.h = PHOTO_H;
+  photoDsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+  photoDsc.data_size = PHOTO_W * PHOTO_H * 2;
+  photoDsc.data = (const uint8_t *)uiPhotoBuf;
   buildStatusStrip();
   buildAll();
   lv_scr_load(scrHome);
 }
 
 void uiLoop() {
-  if (pinAskedAt && millis() - pinAskedAt > 3000) {   // the PC never answered the PIN
+  if (busy && millis() - busySince > 10000) {         // a save SapulMRF never answered
+    setBusy(false);
+    toast(T(S_NO_ANSWER), false);
+    if (lv_scr_act() == scrReview) paintReview();
+    if (lv_scr_act() == scrSeg) paintSeg();
+    if (lv_scr_act() == scrSort) paintSort();
+  }
+  if (pinAskedAt && millis() - pinAskedAt > 8000) {   // the PC never answered the PIN (SapulMRF hashes it slowly)
     pinAskedAt = 0;
     pinEntry = ""; refreshPin();
     lv_label_set_text(lblPinMsg, T(S_NO_ANSWER));
   }
   if (lv_scr_act() == scrScan && !frozen && millis() - lastSeen > 5000) lv_obj_clear_flag(hintBar, LV_OBJ_FLAG_HIDDEN);
-  if (lv_scr_act() != scrHome && lv_disp_get_inactive_time(nullptr) > IDLE_RETURN_MS) goTo(scrHome);
+  uint32_t idle = isOpScreen(lv_scr_act()) ? OP_IDLE_MS : IDLE_RETURN_MS;   // an operator's screen: 5 min, then Lock
+  if (lv_scr_act() != scrHome && lv_disp_get_inactive_time(nullptr) > idle) goTo(scrHome);
 }
 
 // ------------------------------------------------------------ screenshots / dev tools
 const char *uiScreenName() {
   lv_obj_t *s = lv_scr_act();
   return s == scrHome ? "welcome" : s == scrPurok ? "purok" : s == scrScan ? "scan" : s == scrPick ? "pick"
-       : s == scrWeigh ? "weigh" : s == scrReceipt ? "receipt" : s == scrPin ? "pin" : s == scrOp ? "operator" : "other";
+       : s == scrWeigh ? "weigh" : s == scrReceipt ? "receipt" : s == scrPin ? "pin" : s == scrOp ? "operator"
+       : s == scrList ? "list" : s == scrToday ? "today" : s == scrReview ? "review" : s == scrSeg ? "segregate"
+       : s == scrSort ? "sort" : "other";
 }
 
 bool uiGoto(const char *n) {
-  lv_obj_t *all[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp};
-  const char *names[] = {"welcome", "purok", "scan", "pick", "weigh", "receipt", "pin", "operator"};
+  // Staff screens need a real sign-in: without one the PC refuses their data and the kiosk goes home.
+  lv_obj_t *all[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrToday, scrReview};
+  const char *names[] = {"welcome", "purok", "scan", "pick", "weigh", "receipt", "pin", "operator", "today", "review"};
   if (!strcmp(n, "en") || !strcmp(n, "tl")) { lang = !strcmp(n, "tl"); buildAll(); return true; }
-  for (int i = 0; i < 8; i++) if (!strcmp(n, names[i])) {
+  if (!strcmp(n, "who")) { choose(L_NAMES); return true; }
+  for (int i = 0; i < 10; i++) if (!strcmp(n, names[i])) {
     if (all[i] == scrWeigh && !purok) purok = 3;    // a believable screen for review shots
     goTo(all[i]);
     return true;

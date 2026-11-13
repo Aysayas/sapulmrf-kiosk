@@ -10,7 +10,8 @@
 
   Packets, both directions:  [1 byte type][4 byte little-endian length][payload]
     'J' PC->kiosk  JPEG frame          'A' kiosk->PC  ACK, frame shown (send next)
-    'M' either way JSON message (det, receipt, stats, auth, recent / mode, intake, pin...)
+    'M' either way JSON message (det, receipt, stats, auth, operators, op / mode, intake, pin, op...)
+    'P' PC->kiosk  camera-review photo: 4 byte LE delivery id + JPEG (fits PHOTO_W x PHOTO_H)
 
   Battery: INA219 on the shared I2C bus (GPIO19/20), same wiring as the
   Alangan translator. Icon + % top-right on every screen.
@@ -120,6 +121,33 @@ int jpegDraw(JPEGDRAW *p) {                 // copy decoded block into the frame
   return 1;
 }
 
+int photoX = 0, photoY = 0;   // centres a photo narrower than the box (a 4:3 camera)
+
+int photoDraw(JPEGDRAW *p) {
+  for (int y = 0; y < p->iHeight; y++) {
+    int dy = photoY + p->y + y, dx = photoX + p->x;
+    if (dy >= PHOTO_H) break;
+    int w = min(p->iWidth, PHOTO_W - dx);
+    if (w > 0) memcpy(&uiPhotoBuf[dy * PHOTO_W + dx], &p->pPixels[y * p->iWidth], w * 2);
+  }
+  return 1;
+}
+
+void onPhoto(uint8_t *data, size_t len) {
+  if (len < 8) return;
+  int id = data[0] | (data[1] << 8) | (data[2] << 16) | ((uint32_t)data[3] << 24);
+  bool ok = jpeg.openRAM(data + 4, len - 4, photoDraw);
+  if (ok) {
+    memset(uiPhotoBuf, 0, PHOTO_W * PHOTO_H * 2);
+    photoX = max(0, (PHOTO_W - jpeg.getWidth()) / 2);
+    photoY = max(0, (PHOTO_H - jpeg.getHeight()) / 2);
+    jpeg.setPixelType(RGB565_LITTLE_ENDIAN);
+    jpeg.decode(0, 0, 0);
+    jpeg.close();
+  }
+  uiOnPhoto(id, ok);
+}
+
 uint32_t statFrames = 0, statDecodeMs = 0;   // video frames shown and their decode time, per stats period
 
 void onFrame(uint8_t *data, size_t len) {
@@ -145,7 +173,9 @@ void onText(uint8_t *data, size_t len) {
   else if (!strcmp(t, "alerts")) uiOnAlerts(d);
   else if (!strcmp(t, "stats")) uiOnStats((float)(d["kg"] | 0.0), (int)(d["drops"] | 0));
   else if (!strcmp(t, "auth")) uiOnAuth(d);
-  else if (!strcmp(t, "recent")) uiOnRecent(d);
+  else if (!strcmp(t, "operators")) uiOnOperators(d);
+  else if (!strcmp(t, "op")) uiOnOp(d);
+  else if (!strcmp(t, "photo")) uiOnPhoto(d["delivery_id"] | 0, false);   // the PC couldn't get it
   else if (!strcmp(t, "actuate")) {
     if (d["light"].is<const char *>()) uiSetLight(d["light"]);
     beep(d["buzz"] | 0);
@@ -168,6 +198,8 @@ void handlePacket() {
     sendPacket('A', nullptr, 0);          // ACK: shown, PC may send the next frame
   } else if (rxType == 'M') {
     onText(rxBuf, rxLen);
+  } else if (rxType == 'P') {
+    onPhoto(rxBuf, rxLen);
   }
 }
 
@@ -198,7 +230,7 @@ void pcLoop() {
       rxType = (char)rxHdr[0];
       rxLen = rxHdr[1] | (rxHdr[2] << 8) | (rxHdr[3] << 16) | ((uint32_t)rxHdr[4] << 24);
       rxGot = 0;
-      if (rxLen > MAX_PACKET || (rxType != 'J' && rxType != 'M')) {
+      if (rxLen > MAX_PACKET || (rxType != 'J' && rxType != 'M' && rxType != 'P')) {
         Serial.printf("Bad packet %c len %u - dropping PC\n", rxType, rxLen);
         pc.stop(); rxType = 0; break;
       }

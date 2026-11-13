@@ -14,8 +14,10 @@ void uiOnFrameShown(int fps);                     // a video frame was decoded i
 void uiOnReceipt(JsonDocument &d);
 void uiOnAlerts(JsonDocument &d);
 void uiOnStats(float kg, int drops);
-void uiOnAuth(JsonDocument &d);
-void uiOnRecent(JsonDocument &d);
+void uiOnAuth(JsonDocument &d);                   // an operator's PIN, checked by SapulMRF
+void uiOnOperators(JsonDocument &d);              // who can sign in
+void uiOnOp(JsonDocument &d);                     // SapulMRF's answer to an operator task
+void uiOnPhoto(int deliveryId, bool ok);          // a camera-review photo was decoded into uiPhotoBuf
 
 // ---- from the sketch
 void uiSetLight(const char *color);               // "green" | "amber" | "red", decided by SapulMRF
@@ -28,6 +30,7 @@ const char *uiScreenName();                       // for screenshots
 bool uiGoto(const char *name);                    // dev tools: show a screen by name
 
 extern uint16_t *uiFrameBuf;                      // FRAME_W x FRAME_H RGB565; the sketch decodes JPEG into it
+extern uint16_t *uiPhotoBuf;                      // PHOTO_W x PHOTO_H RGB565, camera-review photo
 
 // ---- provided by the sketch
 void wsSend(JsonDocument &doc);

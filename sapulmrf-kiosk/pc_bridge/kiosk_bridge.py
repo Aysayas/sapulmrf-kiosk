@@ -20,8 +20,15 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
                      {"type":"alerts","items":[{"kind":"storage","title":"...","details":"..."}]}
                      {"type":"actuate","light":"green"|"amber"|"red","buzz":1}
         kiosk -> PC  {"type":"mode","mode":"scan"|"idle"}  {"type":"intake",...}
-                     {"type":"pin","pin":"1234"}  {"type":"recent"}  {"type":"stats"}  {"type":"lock"}
+                     {"type":"recent"}  {"type":"stats"}  {"type":"lock"}
                      {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
+        operator mode (an MRF operator signed in with their own SapulMRF kiosk PIN):
+        kiosk -> PC  {"type":"operators"}  {"type":"pin","user_id":3,"pin":"2468"}  {"type":"lock"}
+                     {"type":"op","do":"today"|"suggestions"|"waiting"|"materials"|"areas"|"confirm"|"segregate"|"sort",...}
+                     {"type":"photo","delivery_id":12}
+        PC -> kiosk  {"type":"operators","items":[{"id":3,"name":"Juan"}]}  {"type":"auth","ok":true,"name":"Juan"}
+                     {"type":"op","do":...,"ok":true,"data":...} or {"ok":false,"error":"SapulMRF's message"}
+  'P'  PC -> kiosk   a drop-off photo for camera review: [4 byte LE delivery id][JPEG, fits PHOTO_W x PHOTO_H]
 UDP port 5001: the kiosk broadcasts "SAPULMRF <ip> <port>" every 2 s so this script can find it.
 
 Install:  pip install ultralytics opencv-python requests websockets
@@ -35,6 +42,7 @@ import csv
 import glob
 import json
 import os
+import re
 import socket
 import struct
 import threading
@@ -81,7 +89,6 @@ LIVE_FPS = 30                    # cap; the camera's own rate is usually the lim
 YOLO_IMGSZ = 640
 CONF = 0.45
 STABLE_FRAMES = 12               # same category this many frames in a row = "stable"
-OPERATOR_PINS = {"1234": "Operator"}          # change these!
 LOCAL_LOG = "kiosk_intake.csv"                 # always written, even with a backend
 
 # SapulMRF API. The kiosk is registered there once as a weighing station (e.g. KIOSK-01);
@@ -93,6 +100,9 @@ DEV_PORT = 8091              # --dev: localhost-only control for screenshots
 OUTBOX = "outbox"            # drop-offs SapulMRF hasn't accepted yet, one JSON file each
 STATE_EVERY = 5              # seconds between kiosk-state polls
 RETRY_EVERY = 15             # seconds between outbox retries
+COOKIE = "sapulmrf_session"  # an operator's SapulMRF session, from their kiosk PIN
+PHOTO_W, PHOTO_H = 320, 180  # camera-review photo on the kiosk
+LIST_MAX = 8                 # rows per list sent to the kiosk: what its screen and JSON buffer hold
 
 # Map YOUR model's class names to the three kiosk buckets (lower-case).
 RECYCLABLE = {"bottle", "pet bottle", "plastic bottle", "can", "tin can", "aluminum can",
@@ -182,6 +192,65 @@ def post_delivery(body):
     raise Rejected(r.text)
 
 
+def api_error(r):
+    """SapulMRF's own message, for the kiosk to show as-is (a 422's first field error)."""
+    try:
+        d = r.json().get("detail")
+    except (ValueError, AttributeError):
+        d = None
+    if isinstance(d, list) and d:
+        d = d[0].get("msg")
+    return str(d or f"SapulMRF error {r.status_code}")
+
+
+def photo_id(url):
+    m = re.search(r"/deliveries/(\d+)/photo", url or "")
+    return int(m.group(1)) if m else None
+
+
+def _rows(items, keys):
+    return [{k: i[k] for k in keys} for i in items[:LIST_MAX]]
+
+
+def op_request(do, m):
+    """One operator task from the kiosk -> (method, path, body, shape of the reply). Same routes as the website."""
+    if do == "today":
+        return "GET", "/overview", None, lambda o: {
+            "drops": o["today_deliveries"], "kg": o["today_kg"], "segregate": o["awaiting_segregation"],
+            "areas": [{"name": a["name"], "pct": a["pct"]} for a in o["areas"][:LIST_MAX]]}
+    if do == "suggestions":
+        return "GET", "/classifications/pending", None, lambda items: {"total": len(items), "items": [
+            {"id": c["id"], "suggested": c["suggested"], "pct": round(c["confidence"] * 100),
+             "delivery_id": photo_id(c["image_url"])} for c in items[:LIST_MAX]]}
+    if do == "waiting":
+        waiting = "sorting" if m.get("for") == "sorting" else "segregation"
+        return "GET", f"/operations/intake?waiting={waiting}&limit={LIST_MAX}", None, \
+            lambda items: _rows(items, ("id", "code", "source_area", "category", "weight_kg"))
+    if do in ("materials", "areas"):
+        kind = "materials" if do == "materials" else "storage-areas"
+        return "GET", f"/masterdata/{kind}?active=true", None, lambda items: _rows(items, ("id", "name"))
+    if do == "confirm":
+        body = {"not_recyclable": True} if m.get("not_recyclable") else \
+            {"final_material_id": int(m["material_id"])} if m.get("material_id") else {}
+        return "POST", f"/classifications/{int(m['id'])}/confirm", body, None
+    if do == "segregate":
+        return "POST", f"/deliveries/{int(m['delivery_id'])}/segregation", {
+            "condition": "mixed" if m.get("condition") == "mixed" else "segregated",
+            "wet_kg": float(m["wet_kg"]), "dry_kg": float(m["dry_kg"])}, None
+    if do == "sort":
+        return "POST", "/sorting", {"delivery_id": int(m["delivery_id"]), "rows": [{
+            "material_id": int(m["material_id"]) if m.get("material_id") else None,  # none = residual
+            "storage_area_id": int(m["area_id"]), "kg": float(m["kg"]), "bags": int(m.get("bags") or 0)}]}, None
+    raise ValueError(f"unknown operator task {do!r}")
+
+
+def fit_jpeg(jpeg, w, h, quality=80):
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    s = min(w / img.shape[1], h / img.shape[0])
+    img = cv2.resize(img, (max(1, int(img.shape[1] * s)), max(1, int(img.shape[0] * s))), interpolation=cv2.INTER_AREA)
+    return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])[1].tobytes()
+
+
 # ---------------------------------------------------------------- state
 class Bridge:
     def __init__(self, model_path, cam_index):
@@ -199,7 +268,7 @@ class Bridge:
         self.window = threading.BoundedSemaphore(IN_FLIGHT)  # free slots for frames the kiosk hasn't shown yet
         self.alive = False
         self.mode = "idle"
-        self.auth = False
+        self.token = None     # the signed-in operator's SapulMRF session (memory only)
         self.history = deque(maxlen=STABLE_FRAMES)
         self.last = {"recyclable": 0, "residual": 0, "bio": 0, "category": "Nothing detected"}
         self.fps = 0.0
@@ -479,7 +548,6 @@ class Bridge:
         sock.settimeout(None)
         self.sock = sock
         self.mode = "idle"
-        self.auth = False
         self.alive = True
         self.window = threading.BoundedSemaphore(IN_FLIGHT)
         print(f"Connected to kiosk {host}:{port}")
@@ -493,6 +561,7 @@ class Bridge:
             self.stream_loop()
         finally:
             self.alive = False
+            self.sign_out()  # a dropped kiosk must not leave an operator signed in
             try:
                 sock.close()
             except OSError:
@@ -580,21 +649,105 @@ class Bridge:
             self.send_json(self.stats())
         elif t == "shot":
             self.shot_name = str(msg.get("screen", ""))
+        elif t == "operators":
+            self.send_operators()
         elif t == "pin":
-            name = OPERATOR_PINS.get(str(msg.get("pin", "")))
-            self.auth = bool(name)
-            self.send_json({"type": "auth", "ok": bool(name), "name": name or ""})
-        elif t == "recent" and self.auth:
+            self.sign_in(msg)
+        elif t == "op":
+            self.operator(msg)
+        elif t == "photo":
+            self.send_photo(msg)
+        elif t == "recent" and self.token:
             self.send_json({"type": "recent", "rows": self.recent_rows()})
         elif t == "stats":
             self.send_json(self.stats())
         elif t == "lock":
-            self.auth = False
+            self.sign_out()
         elif t == "reading" and API_URL and requests:  # HX711 scale: SapulMRF checks scale weights against it
             try:
                 api("POST", "/devices/readings", json={"kg": float(msg["kg"]), "stable": bool(msg.get("stable"))})
             except requests.RequestException as e:
                 print("scale reading not sent:", type(e).__name__)
+
+    # ----- operator mode: their own SapulMRF session, so the website's rules and Activity log apply
+    def send_operators(self):
+        r, error = None, "Operator sign-in needs SapulMRF, which isn't set up on this PC."
+        if API_URL and requests:
+            try:
+                r = api("GET", "/devices/kiosk-operators")
+                error = None if r.ok else api_error(r)
+            except requests.RequestException:
+                error = "SapulMRF isn't reachable."
+        if error:
+            self.send_json({"type": "operators", "items": [], "error": error})
+        else:
+            self.send_json({"type": "operators", "items": r.json()[:LIST_MAX]})
+
+    def sign_in(self, msg):
+        if not (API_URL and requests):
+            return self.send_json({"type": "auth", "ok": False, "error": "Operator sign-in needs SapulMRF."})
+        try:
+            r = api("POST", "/devices/kiosk-login", json={"user_id": int(msg["user_id"]), "pin": str(msg["pin"])})
+        except (KeyError, ValueError, TypeError):
+            return self.send_json({"type": "auth", "ok": False, "error": "Pick your name again."})
+        except requests.RequestException:
+            return self.send_json({"type": "auth", "ok": False, "error": "SapulMRF isn't reachable."})
+        if not r.ok:
+            return self.send_json({"type": "auth", "ok": False, "locked": r.status_code == 423, "error": api_error(r)})
+        self.sign_out()
+        body = r.json()
+        self.token = body["token"]
+        print("operator signed in:", body["name"])
+        self.send_json({"type": "auth", "ok": True, "name": body["name"]})
+
+    def sign_out(self):
+        token, self.token = self.token, None
+        if token:
+            try:
+                requests.post(API_URL + "/auth/logout", cookies={COOKIE: token}, timeout=5)
+                print("operator signed out")
+            except requests.RequestException:
+                pass  # the session ends by itself after 30 minutes
+
+    def as_operator(self, method, path, body=None):
+        """Returns (response, None) or (None, error message). A 401 means the session ended: the kiosk locks."""
+        if not self.token:
+            return None, "Sign in first."
+        try:
+            r = requests.request(method, API_URL + path, json=body, cookies={COOKIE: self.token}, timeout=8)
+        except requests.RequestException:
+            return None, "SapulMRF isn't reachable."
+        if r.status_code == 401:
+            self.token = None
+            return None, "Signed out. Sign in again."
+        return (r, None) if r.ok else (None, api_error(r))
+
+    def operator(self, msg):
+        do = msg.get("do")
+        try:
+            method, path, body, shape = op_request(do, msg)
+        except (KeyError, ValueError, TypeError) as e:
+            print("bad operator task:", e, msg)
+            return self.send_json({"type": "op", "do": do, "ok": False, "error": "The kiosk sent an incomplete form."})
+        r, error = self.as_operator(method, path, body)
+        reply = {"type": "op", "do": do, "ok": r is not None}
+        if r is None:
+            reply.update(error=error, signed_out=self.token is None)
+        elif shape:
+            reply["data"] = shape(r.json())
+        if method == "POST":
+            print("operator", do, "->", "saved" if r is not None else error)
+        self.send_json(reply)
+
+    def send_photo(self, msg):
+        try:
+            did = int(msg["delivery_id"])
+        except (KeyError, ValueError, TypeError):
+            return
+        r, error = self.as_operator("GET", f"/deliveries/{did}/photo")
+        if r is None:
+            return self.send_json({"type": "photo", "delivery_id": did, "ok": False, "error": error})
+        self.send_packet(b"P", struct.pack("<I", did) + fit_jpeg(r.content, PHOTO_W, PHOTO_H))
 
     def stream_loop(self):
         """Newest frame + newest boxes to the kiosk at SEND_FPS, whatever speed YOLO runs at."""
