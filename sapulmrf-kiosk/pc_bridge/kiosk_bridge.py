@@ -907,7 +907,8 @@ class Bridge:
 
 def dev_server(bridge):
     """--dev only, localhost only: /shot?label=x saves a kiosk screenshot, /goto?screen=weigh switches
-    the kiosk's screen (needs DEV_TOOLS 1 in config.h), /send?json={...} passes a message to the kiosk."""
+    the kiosk's screen (needs DEV_TOOLS 1 in config.h), /signin?user_id=3&pin=1234 signs an operator in like the
+    PIN pad, /send?json={...} passes a message to the kiosk."""
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -925,12 +926,16 @@ def dev_server(bridge):
                     bridge.send_json({"type": "goto", "screen": q.get("screen", "")})
                     time.sleep(0.6)
                     out = {"ok": True}
+                elif u.path == "/signin":  # sign an operator in as the PIN pad would: /signin?user_id=3&pin=1234
+                    bridge.sign_in(q)
+                    time.sleep(1.5)
+                    out = {"ok": bridge.token is not None}
                 elif u.path == "/send":
                     bridge.send_json(json.loads(q["json"]))
                     time.sleep(0.4)
                     out = {"ok": True}
                 else:
-                    out = {"ok": False, "error": "use /shot, /goto or /send"}
+                    out = {"ok": False, "error": "use /shot, /goto, /signin or /send"}
             except Exception as e:
                 out = {"ok": False, "error": str(e)}
             body = json.dumps(out).encode()
