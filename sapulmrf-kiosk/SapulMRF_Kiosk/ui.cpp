@@ -928,9 +928,12 @@ static void buildOperator() {
                          &atk_b24, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
     lv_obj_t *l = lv_obj_get_child(b, 0);
     lv_label_set_text_fmt(l, "%s  %s", icons[i], T(tiles[i]));
-    lv_obj_align(l, LV_ALIGN_LEFT_MID, 16, 0);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, 0);   // the button centres its label; title on top, count under
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_size(l, 328, 30);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 4);
     tileCount[i] = text(b, "", &atk_r18, i ? T_INK2 : 0xDCEFE2);
-    lv_obj_align(tileCount[i], LV_ALIGN_RIGHT_MID, -16, 0);
+    lv_obj_align(tileCount[i], LV_ALIGN_BOTTOM_LEFT, 36, -4);   // under the title, past its icon
   }
   const int px = T_MARGIN + 376, pw = 800 - T_MARGIN - px;
   lblOpToday = text(scrOp, todayText[0] ? todayText : T(S_LOADING), &atk_r18, T_INK, px, 170, pw);
