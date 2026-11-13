@@ -86,5 +86,5 @@
 #define DISPLAY_TEST  0      // 1 = flash red/green/blue/white at boot to check the panel
 #define DEV_TOOLS     1      // 1 = the PC may switch screens for screenshots (design review); 0 for deployment
 
-// Lower this (e.g. 12000000) if the screen flickers while Wi-Fi is streaming
-#define RGB_PCLK_HZ 14000000
+// 14 MHz starved the PSRAM-fed panel after long runs (image shifted, lines on the left edge). Lower to 10000000 if it returns.
+#define RGB_PCLK_HZ 12000000
