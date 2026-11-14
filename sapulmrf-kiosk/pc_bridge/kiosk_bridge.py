@@ -111,7 +111,7 @@ STATE_EVERY = 5              # seconds between kiosk-state polls
 RETRY_EVERY = 15             # seconds between outbox retries
 COOKIE = "sapulmrf_session"  # an operator's SapulMRF session, from their kiosk PIN
 PHOTO_W, PHOTO_H = 320, 180  # camera-review photo on the kiosk
-OUTGOING_KINDS = ("sale", "compost", "disposal")
+OUTGOING_KINDS = ("sale", "giveaway", "compost", "disposal")
 LIST_MAX = 8                 # rows per list sent to the kiosk: what its screen and JSON buffer hold
 
 # Map YOUR model's class names to the three kiosk buckets (lower-case). A class in none of them is ignored, so the
@@ -321,10 +321,11 @@ def op_request(do, m):
             raise ValueError(f"unknown outgoing kind {kind!r}")
         return "POST", "/outgoing", {
             "type": kind,
-            "material_id": int(m["material_id"]) if kind == "sale" else None,
+            "material_id": int(m["material_id"]) if kind in ("sale", "giveaway") else None,
             "storage_area_id": int(m["area_id"]) if kind != "compost" else None,
             "kg": float(m["kg"]), "recipient": str(m["recipient"]).strip(),
-            "price_per_kg": float(m["price"]) if kind == "sale" and m.get("price") else None,
+            # a sale has a price; compost has one only when sold; a give-away never does
+            "price_per_kg": float(m["price"]) if kind in ("sale", "compost") and m.get("price") else None,
             "client_key": str(m["key"]),  # made once per sale on the kiosk: a resend can't sell twice
         }, lambda o: {k: o[k] for k in ("code", "kg", "recipient", "total")}
     if do == "fixable":  # today's deliveries, to fix one

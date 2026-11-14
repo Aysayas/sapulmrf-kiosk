@@ -34,7 +34,7 @@ enum Str {
   S_R_PUROK, S_R_KIND, S_R_WEIGHT, S_R_WETDRY, S_R_SORT, S_R_OTHER, S_REDO, S_O_SORT, S_O_SEGSORT, S_O_SEG, S_O_ALL,
   S_UNDO, S_REDO_DROP, S_SYSTEM_KG, S_COUNTED, S_RC_SPILLED, S_RC_MISCOUNT, S_RC_MOVED, S_PICK_AREA_RC,
   S_STEP_BUYER, S_LAST_SALE, S_NEXT, S_NEED_KG, S_NEED_PRICE, S_NEED_BUYER, S_ONLY_KG, S_SAVE_PESO, S_SAVE_KG, S_WALK_IN,
-  S_NO_BUYERS,
+  S_NO_BUYERS, S_MODE_SELL, S_MODE_FREE, S_SAVE_FREE, S_GIVEN_FREE,
   S_COUNT
 };
 static const char *const WORDS[][2] = {
@@ -144,7 +144,7 @@ static const char *const WORDS[][2] = {
   {"%s kg waiting", "%s kg naghihintay"},
   {"Sell / give out", "Benta / ibigay"},
   {"Sale, compost, residual", "Benta, kompost, di-nabubulok"},
-  {"Sale", "Benta"},
+  {"Recyclables", "Recyclable"},
   {"Nothing in storage for this.", "Walang laman para dito."},
   {"Compost on hand  ·  %s kg", "Kompost na handa  ·  %s kg"},
   {"Price/kg", "Presyo/kg"},
@@ -193,6 +193,10 @@ static const char *const WORDS[][2] = {
   {"Save  ·  %s kg", "I-save  ·  %s kg"},
   {"Walk-in buyer", "Walk-in na mamimili"},
   {"Add regular buyers on the website: Master data.", "Idagdag ang mga mamimili sa website: Master data."},
+  {"Sell", "Ibenta"},
+  {"Give free", "Ibigay nang libre"},
+  {"Save  ·  %s kg  ·  free", "I-save  ·  %s kg  ·  libre"},
+  {"Given free", "Ibinigay nang libre"},
 };
 static_assert(sizeof WORDS / sizeof WORDS[0] == S_COUNT, "every word needs English and Tagalog");
 static int lang = DEFAULT_LANG;
@@ -1398,12 +1402,13 @@ struct StockItem { int matId, areaId; float kg, price; String label; };
 static StockItem stock[MAX_STOCK], chosen;
 static int nStock = 0, nShown = 0, shownIdx[MAX_STOCK], sellKind = 0, sellPick = -1;   // kind: 0 sale, 1 compost, 2 residual
 static int sellStep = 0;                           // 0 kg, 1 price, 2 buyer
+static bool sellFree = false;                      // given away: no price (recyclables or compost)
 static float compostHand = 0;
 static String names[MAX_NAMES], buyer, sellKey, lastPrice;
 static int nNames = 0;
 static const char *const KINDS[3] = {"sale", "compost", "disposal"};
 static NumField fOutKg = {nullptr, "", S_KG_F, true}, fPrice = {nullptr, "", S_PRICE, true};
-static lv_obj_t *btnKind[3], *sellList, *lblSellWhat, *btnStep[3], *lblSellTotal, *btnSellSave, *padBox, *buyerBox;
+static lv_obj_t *btnKind[3], *sellList, *lblSellWhat, *btnStep[3], *lblSellTotal, *btnSellSave, *padBox, *buyerBox, *btnMode[2];
 static lv_obj_t *lblSoldCode, *lblSoldLine, *lblSoldTotal;
 
 static float sellAvailable() { return sellKind == 1 ? compostHand : chosen.kg; }
@@ -1467,17 +1472,19 @@ static void buildSell() {
 }
 
 // ---- the form: three step rows on the left; the keypad or the buyer buttons on the right
+static bool hasPrice() { return sellKind != 2 && !sellFree; }   // residual and give-aways: none
+
 static int nextMissing() {                         // -1 when ready, else the step to fill, 3 = more kg than there is
   float kg = fOutKg.v.toFloat();
   if (kg <= 0) return 0;
   if (kg > sellAvailable() + 0.001f) return 3;
-  if (sellKind == 0 && fPrice.v.toFloat() <= 0) return 1;
+  if (hasPrice() && fPrice.v.toFloat() <= 0) return 1;
   if (!buyer.length()) return 2;
   return -1;
 }
 
 static void setStep(int s) {
-  if (s == 1 && sellKind != 0) s = 2;            // only a sale has a price
+  if (s == 1 && !hasPrice()) s = 2;              // only selling has a price
   sellStep = s;
   activeField = s == 0 ? &fOutKg : s == 1 ? &fPrice : nullptr;
 }
@@ -1487,7 +1494,7 @@ static void paintStepRow(int i, const char *label, const char *value, bool shown
   if (!shown) { lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN); return; }
   lv_obj_clear_flag(b, LV_OBJ_FLAG_HIDDEN);
   lv_obj_set_y(b, y);
-  y += 70;
+  y += 64;
   bool on = i == sellStep;
   lv_obj_set_style_border_width(b, on ? 4 : 2, 0);
   lv_obj_set_style_border_color(b, lv_color_hex(on ? T_PRIMARY : T_LINE), 0);
@@ -1506,17 +1513,25 @@ static void paintSellForm() {
   snprintf(line, sizeof line, T(S_AVAILABLE), k);
   lv_label_set_text(lblSellWhat, (what + "  ·  " + line).c_str());
 
-  int y = 96;
+  bool modes = sellKind != 2;                      // residual is always disposal: no switch
+  for (int i = 0; i < 2; i++) {
+    if (!modes) { lv_obj_add_flag(btnMode[i], LV_OBJ_FLAG_HIDDEN); continue; }
+    lv_obj_clear_flag(btnMode[i], LV_OBJ_FLAG_HIDDEN);
+    bool on = (i == 1) == sellFree;
+    lv_obj_set_style_bg_color(btnMode[i], lv_color_hex(on ? T_PRIMARY : T_CARD), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(btnMode[i], 0), lv_color_hex(on ? 0xFFFFFF : T_INK), 0);
+  }
+  int y = modes ? 156 : 96;
   String kgv = fOutKg.v.length() ? fOutKg.v + " kg" : String("-");
   paintStepRow(0, T(S_KG_F), kgv.c_str(), true, y);
   String pv = fPrice.v.length() ? fPrice.v : String("-");
   if (fPrice.v.length() && fPrice.v == lastPrice) pv += String("  (") + T(S_LAST_SALE) + ")";
-  paintStepRow(1, T(S_PRICE), pv.c_str(), sellKind == 0, y);
+  paintStepRow(1, T(S_PRICE), pv.c_str(), hasPrice(), y);
   paintStepRow(2, T(S_STEP_BUYER), buyer.length() ? buyer.c_str() : "-", true, y);
 
   float kg = fOutKg.v.toFloat(), price = fPrice.v.toFloat();
   char tot[16]; snprintf(tot, sizeof tot, "%.2f", kg * price);
-  if (sellKind == 0 && kg > 0 && price > 0) lv_label_set_text_fmt(lblSellTotal, T(S_OUT_TOTAL), tot);
+  if (hasPrice() && kg > 0 && price > 0) lv_label_set_text_fmt(lblSellTotal, T(S_OUT_TOTAL), tot);
   else lv_label_set_text(lblSellTotal, "");
 
   if (sellStep == 2) { lv_obj_add_flag(padBox, LV_OBJ_FLAG_HIDDEN); lv_obj_clear_flag(buyerBox, LV_OBJ_FLAG_HIDDEN); paintBuyers(); }
@@ -1540,8 +1555,15 @@ static void paintSellForm() {
   else if (miss == 3) lv_label_set_text_fmt(l, T(S_ONLY_KG), k);
   else if (miss == 1) lv_label_set_text(l, T(S_NEED_PRICE));
   else if (miss == 2) lv_label_set_text(l, T(S_NEED_BUYER));
-  else if (sellKind == 0) lv_label_set_text_fmt(l, T(S_SAVE_PESO), tot);
+  else if (hasPrice()) lv_label_set_text_fmt(l, T(S_SAVE_PESO), tot);
+  else if (sellFree) lv_label_set_text_fmt(l, T(S_SAVE_FREE), fOutKg.v.c_str());
   else lv_label_set_text_fmt(l, T(S_SAVE_KG), fOutKg.v.c_str());
+}
+
+static void onMode(lv_event_t *e) {
+  sellFree = (int)(intptr_t)lv_event_get_user_data(e) == 1;
+  if (sellStep == 1 && !hasPrice()) setStep(2);  // the kg and the buyer stay; only the price comes and goes
+  paintSellForm();
 }
 
 static void onStepRow(lv_event_t *e) { setStep((int)(intptr_t)lv_event_get_user_data(e)); paintSellForm(); }
@@ -1572,10 +1594,11 @@ static void onSellSave(lv_event_t *) {
   if (busy) return;
   int miss = nextMissing();
   if (miss >= 0) { setStep(miss == 3 ? 0 : miss); paintSellForm(); return; }   // take the operator to what's missing
-  JsonDocument d; d["type"] = "op"; d["do"] = "outgoing"; d["kind"] = KINDS[sellKind];
+  JsonDocument d; d["type"] = "op"; d["do"] = "outgoing";
+  d["kind"] = sellKind == 0 && sellFree ? "giveaway" : KINDS[sellKind];   // recyclables given free are a give-away
   if (sellKind != 1) { d["area_id"] = chosen.areaId; if (sellKind == 0) d["material_id"] = chosen.matId; }
   d["kg"] = fOutKg.v.toFloat(); d["recipient"] = buyer; d["key"] = sellKey;
-  if (sellKind == 0) d["price"] = fPrice.v.toFloat();
+  if (hasPrice()) d["price"] = fPrice.v.toFloat();
   wsSend(d); setBusy(true); paintSellForm();
 }
 
@@ -1584,8 +1607,12 @@ static void buildSellForm() {
   lblSellWhat = text(scrSellForm, "", &atk_r18, T_INK, T_MARGIN, 60, 768);
   lv_label_set_long_mode(lblSellWhat, LV_LABEL_LONG_DOT);
   lv_obj_set_height(lblSellWhat, 26);
+  const Str modes[2] = {S_MODE_SELL, S_MODE_FREE};
+  for (int i = 0; i < 2; i++)                      // Sell | Give free
+    btnMode[i] = button(scrSellForm, T(modes[i]), T_MARGIN + i * 196, 96, 190, 52, T_CARD, T_INK, &atk_b24, onMode,
+                        (void *)(intptr_t)i, T_LINE);
   for (int i = 0; i < 3; i++) {                    // a caption on the left, the value large on the right
-    btnStep[i] = button(scrSellForm, "", T_MARGIN, 96 + i * 70, 388, 62, T_CARD, T_INK, &atk_r18, onStepRow,
+    btnStep[i] = button(scrSellForm, "", T_MARGIN, 156 + i * 64, 388, 58, T_CARD, T_INK, &atk_r18, onStepRow,
                         (void *)(intptr_t)i, T_LINE);
     lv_obj_t *cap = lv_obj_get_child(btnStep[i], 0);
     lv_obj_set_width(cap, 120);
@@ -1597,7 +1624,7 @@ static void buildSellForm() {
     lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_align(val, LV_ALIGN_RIGHT_MID, -4, 0);
   }
-  lblSellTotal = text(scrSellForm, "", &atk_b32, T_INK, T_MARGIN, 312);
+  lblSellTotal = text(scrSellForm, "", &atk_b32, T_INK, T_MARGIN, 352);
   padBox = box(scrSellForm, 420, 92, 364, 304, T_BG);
   lv_obj_t *kp = keypad(padBox, formKeys, 0, 0, 364, 236, onFormKey);
   lv_obj_set_style_text_font(kp, &atk_b48, LV_PART_ITEMS);
@@ -1623,13 +1650,14 @@ static void showSold(JsonObject o) {
   char k[16]; fmtKg(k, sizeof k, o["kg"] | 0.0f);
   lv_label_set_text(lblSoldCode, o["code"] | "");
   lv_label_set_text_fmt(lblSoldLine, "%s kg  ·  %s", k, (const char *)(o["recipient"] | ""));
-  if (o["total"].isNull()) lv_label_set_text(lblSoldTotal, "");
+  if (o["total"].isNull()) lv_label_set_text(lblSoldTotal, sellKind != 2 ? T(S_GIVEN_FREE) : "");
   else { char tot[16]; snprintf(tot, sizeof tot, "%.2f", o["total"].as<float>()); lv_label_set_text_fmt(lblSoldTotal, T(S_OUT_TOTAL), tot); }
   goTo(scrSold);
 }
 
 static void newSale() {                            // an empty form, the last price, a fresh key (a resend reuses it)
   fOutKg.v = ""; buyer = "";
+  sellFree = sellKind == 1;
   lastPrice = "";
   if (sellKind == 0 && chosen.price > 0) { char p[16]; snprintf(p, sizeof p, "%.2f", chosen.price); lastPrice = p; }
   fPrice.v = lastPrice;
