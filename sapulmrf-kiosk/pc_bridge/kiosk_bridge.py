@@ -24,7 +24,8 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
                      {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
         operator mode (an MRF operator signed in with their own SapulMRF kiosk PIN):
         kiosk -> PC  {"type":"operators"}  {"type":"pin","user_id":3,"pin":"2468"}  {"type":"lock"}
-                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort"|"compost"|"compost_start"|"compost_log"|"compost_finish"|"stock"|"compost_on_hand"|"recipients"|"outgoing",...}  (a sort may carry
+                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort"|"compost"|"compost_start"|"compost_log"|"compost_finish"|"stock"|"compost_on_hand"|"recipients"|"outgoing"|
+                      "fixable"|"undo"|"area_stock"|"recount",...}  (a sort may carry
                       the camera's suggestion_id + guess_material_id: the bridge then confirms or corrects that suggestion)
                      {"type":"photo","delivery_id":12}
         PC -> kiosk  {"type":"operators","items":[{"id":3,"name":"Juan"}]}  {"type":"auth","ok":true,"name":"Juan"}
@@ -326,7 +327,31 @@ def op_request(do, m):
             "price_per_kg": float(m["price"]) if kind == "sale" and m.get("price") else None,
             "client_key": str(m["key"]),  # made once per sale on the kiosk: a resend can't sell twice
         }, lambda o: {k: o[k] for k in ("code", "kg", "recipient", "total")}
+    if do == "fixable":  # today's deliveries, to fix one
+        return "GET", "/corrections/fixable", None, lambda rows: [
+            {"id": x["id"], "code": x["code"], "stage": x["stage"],
+             "label": f"{x['code']}  ·  {x['source_area']}  ·  {x['weight_kg']:g} kg"} for x in rows[:LIST_MAX]]
+    if do == "undo":
+        if m.get("to") not in ("sort", "segregation", "delivery"):
+            raise ValueError(f"unknown step {m.get('to')!r}")
+        return "POST", "/corrections/undo", {"delivery_id": int(m["delivery_id"]), "to": m["to"],
+                                             "reason": str(m["reason"]).strip()},             lambda c: {"code": c["record_code"], "to": c["kind"]}
+    if do == "area_stock":  # one area's materials (residual included), to recount one
+        area = int(m["area_id"])
+        return "GET", "/operations/inventory", None, lambda v: [
+            {"material_id": s["material_id"], "material": s["material"], "kg": s["kg"]}
+            for s in v["stock"] if s["storage_area_id"] == area][:LIST_MAX]
+    if do == "recount":
+        return "POST", "/inventory/adjustments", {
+            "material_id": int(m["material_id"]) if m.get("material_id") else None, "storage_area_id": int(m["area_id"]),
+            "actual_kg": float(m["kg"]), "reason": str(m["reason"]).strip()}, None
     raise ValueError(f"unknown operator task {do!r}")
+
+
+def replaces_body(msg):
+    """A drop-off recorded again in place of one an operator undid: SapulMRF links the fix to it."""
+    code = str(msg.get("replaces") or "").strip()
+    return {"replaces": code[:12]} if code else {}
 
 
 def confirm_body(guess_material_id, material_id):
@@ -487,7 +512,7 @@ class Bridge:
         }
         body = {"source_area": record["source_area"], "category": record["category"],
                 "weight_kg": record["weight_kg"], "weighed_by": "manual" if record["manual"] else "scale",
-                "client_key": str(uuid.uuid4())}  # same key on every retry, so SapulMRF stores it once
+                "client_key": str(uuid.uuid4()), **replaces_body(msg)}  # same key on every retry: stored once
         if self.snapshot:
             det, frame, boxes = self.snapshot
             body["cv"] = {"category": det["category"], "confidence": det["conf"],
