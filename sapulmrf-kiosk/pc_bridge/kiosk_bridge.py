@@ -952,12 +952,16 @@ def dev_server(bridge):
                     bridge.sign_in(q)
                     time.sleep(1.5)
                     out = {"ok": bridge.token is not None}
+                elif u.path == "/op":  # run an operator task as if the kiosk sent it: /op?json={"do":"stock"}
+                    bridge.operator({"type": "op", **json.loads(q["json"])})
+                    time.sleep(1.0)
+                    out = {"ok": True}
                 elif u.path == "/send":
                     bridge.send_json(json.loads(q["json"]))
                     time.sleep(0.4)
                     out = {"ok": True}
                 else:
-                    out = {"ok": False, "error": "use /shot, /goto, /signin or /send"}
+                    out = {"ok": False, "error": "use /shot, /goto, /signin, /op or /send"}
             except Exception as e:
                 out = {"ok": False, "error": str(e)}
             body = json.dumps(out).encode()
