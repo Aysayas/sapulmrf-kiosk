@@ -28,6 +28,8 @@ enum Str {
   S_SAVE, S_SAVING, S_SAVED_OK, S_SIGNED_OUT, S_RESIDUAL_M, S_N_WAITING, S_CAM_GUESS, S_AREA_IS, S_TOTAL,
   S_T_COMPOST, S_WET_WAITING, S_START_BATCH, S_NOTHING_WAITING, S_NO_BATCHES, S_TURNING, S_WATERING,
   S_INSPECT, S_FINISH, S_COMPOST_MADE, S_START_KG, S_BATCH_LINE, S_SAVE_FINISH, S_KG_WAITING,
+  S_T_SELL, S_SELL_SUB, S_K_SALE, S_NOTHING_OUT, S_COMPOST_HAND, S_PRICE, S_BUYER_PICK, S_BUYER_IS, S_WHO_FOR,
+  S_AVAILABLE, S_RECORDED, S_OUT_TOTAL, S_NO_NAMES,
   S_COUNT
 };
 static const char *const WORDS[][2] = {
@@ -135,6 +137,19 @@ static const char *const WORDS[][2] = {
   {"%s  ·  day %d  ·  %s kg", "%s  ·  araw %d  ·  %s kg"},
   {"Save finished", "I-save na tapos"},
   {"%s kg waiting", "%s kg naghihintay"},
+  {"Sell / give out", "Benta / ibigay"},
+  {"Sale, compost, residual", "Benta, kompost, di-nabubulok"},
+  {"Sale", "Benta"},
+  {"Nothing in storage for this.", "Walang laman para dito."},
+  {"Compost on hand  ·  %s kg", "Kompost na handa  ·  %s kg"},
+  {"Price/kg", "Presyo/kg"},
+  {"Buyer: tap to choose  ›", "Mamimili: pindutin para pumili  ›"},
+  {"To: %s  ›", "Para kay: %s  ›"},
+  {"Who is it for?", "Para kanino?"},
+  {"%s kg available", "%s kg ang mayroon"},
+  {"Recorded", "Naitala"},
+  {"Total PHP %s", "Kabuuan PHP %s"},
+  {"No recent names. Type one below.", "Wala pang pangalan. Mag-type sa ibaba."},
 };
 static_assert(sizeof WORDS / sizeof WORDS[0] == S_COUNT, "every word needs English and Tagalog");
 static int lang = DEFAULT_LANG;
@@ -167,7 +182,7 @@ static bool afterDropOff = false;      // going home from a receipt resets the l
 
 // screens and the widgets that change
 static lv_obj_t *scrHome, *scrPurok, *scrScan, *scrPick, *scrWeigh, *scrReceipt, *scrPin, *scrOp;
-static lv_obj_t *scrList, *scrSortMat, *scrSeg, *scrSort, *scrCompost;   // staff: chooser, material with photo, the two forms
+static lv_obj_t *scrList, *scrSortMat, *scrSeg, *scrSort, *scrCompost, *scrSell, *scrSellForm, *scrBuyer, *scrSold;   // staff: chooser, material with photo, the two forms
 static lv_obj_t *lblToday, *alertBox, *lblAlert;
 static lv_obj_t *hintBar, *lblHint;
 static lv_obj_t *imgVideo, *lblVideoWait, *lblLive, *frameRing, *gotBar, *lblGot, *lblScanStatus, *barSteady;
@@ -738,7 +753,8 @@ uint16_t *uiPhotoBuf = nullptr;
 static lv_img_dsc_t photoDsc;
 
 static bool isOpScreen(lv_obj_t *s) {
-  return s == scrOp || s == scrSortMat || s == scrSeg || s == scrSort || s == scrCompost ||
+  return s == scrOp || s == scrSortMat || s == scrSeg || s == scrSort || s == scrCompost || s == scrSell ||
+         s == scrSellForm || s == scrBuyer || s == scrSold ||
          (s == scrList && listKind != L_NAMES);
 }
 
@@ -903,12 +919,12 @@ void uiOnAuth(JsonDocument &d) {
 }
 
 // ---- operator home: today's numbers and storage on the right, the two tasks with what's waiting on the left
-static lv_obj_t *lblHi, *lblNetLine, *lblIpLine, *lblOpToday, *tileCount[3];
+static lv_obj_t *lblHi, *lblNetLine, *lblIpLine, *lblOpToday, *tileCount[4];
 static lv_obj_t *areaRow[4], *areaName[4], *areaBar[4], *areaPct[4];
 static void onOpLock(lv_event_t *) { goTo(scrHome); }   // goTo signs out when leaving the staff screens
 static void onTile(lv_event_t *e) {
   int i = (int)(intptr_t)lv_event_get_user_data(e);
-  if (i == 2) goTo(scrCompost); else choose(i ? L_SORT : L_SEG);
+  if (i == 3) goTo(scrSell); else if (i == 2) goTo(scrCompost); else choose(i ? L_SORT : L_SEG);
 }
 
 static void buildOperator() {
@@ -922,10 +938,10 @@ static void buildOperator() {
   lv_obj_set_height(lblOpAlert, 24);
   lv_obj_align(lblOpAlert, LV_ALIGN_LEFT_MID, 14, 0);
   lv_obj_add_flag(opAlert, LV_OBJ_FLAG_HIDDEN);
-  const Str tiles[3] = {S_T_SEG, S_T_SORT, S_T_COMPOST};
-  const char *icons[3] = {LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE, LV_SYMBOL_LOOP};
-  for (int i = 0; i < 3; i++) {                  // three 72 px tiles between the greeting and the Lock button
-    lv_obj_t *b = button(scrOp, "", T_MARGIN, 164 + i * 80, 360, 72, i ? T_CARD : T_PRIMARY, i ? T_INK : 0xFFFFFF,
+  const Str tiles[4] = {S_T_SEG, S_T_SORT, S_T_COMPOST, S_T_SELL};
+  const char *icons[4] = {LV_SYMBOL_SHUFFLE, LV_SYMBOL_DRIVE, LV_SYMBOL_LOOP, LV_SYMBOL_UPLOAD};
+  for (int i = 0; i < 4; i++) {                  // four 56 px tiles between the greeting and the Lock button
+    lv_obj_t *b = button(scrOp, "", T_MARGIN, 164 + i * 60, 360, 56, i ? T_CARD : T_PRIMARY, i ? T_INK : 0xFFFFFF,
                          &atk_b24, onTile, (void *)(intptr_t)i, i ? T_LINE : 0);
     lv_obj_set_style_pad_all(b, 0, 0);            // place the title and count exactly: no button padding
     lv_obj_t *l = lv_obj_get_child(b, 0);
@@ -933,9 +949,9 @@ static void buildOperator() {
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_LEFT, 0);   // the button centres its label; title on top, count under
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     lv_obj_set_size(l, 328, 30);
-    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 16, 8);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 16, 2);
     tileCount[i] = text(b, "", &atk_r18, i ? T_INK2 : 0xDCEFE2);
-    lv_obj_align(tileCount[i], LV_ALIGN_TOP_LEFT, 52, 40);   // under the title, lined up with its words
+    lv_obj_align(tileCount[i], LV_ALIGN_TOP_LEFT, 52, 31);   // under the title, lined up with its words
   }
   const int px = T_MARGIN + 376, pw = 800 - T_MARGIN - px;
   lblOpToday = text(scrOp, todayText[0] ? todayText : T(S_LOADING), &atk_r18, T_INK, px, 170, pw);
@@ -962,6 +978,7 @@ static void paintHome(JsonObject o) {
   lv_label_set_text_fmt(tileCount[1], T(S_N_WAITING), (int)(o["sort"] | 0));
   char w[16]; fmtKg(w, sizeof w, o["waiting"] | 0.0f);
   lv_label_set_text_fmt(tileCount[2], T(S_KG_WAITING), w);   // wet waste waiting for compost
+  lv_label_set_text(tileCount[3], T(S_SELL_SUB));
   JsonArray a = o["areas"];
   for (int i = 0; i < 4; i++) {
     if (i >= (int)a.size()) { lv_obj_add_flag(areaRow[i], LV_OBJ_FLAG_HIDDEN); continue; }
@@ -1082,9 +1099,11 @@ static void paintSort() {
 }
 
 static void paintCompostForm();
+static void paintSellForm();
 static void repaintForm() {
   lv_obj_t *s = lv_scr_act();
   if (s == scrSeg) paintSeg(); else if (s == scrSort) paintSort(); else if (s == scrCompost) paintCompostForm();
+  else if (s == scrSellForm) paintSellForm();
 }
 
 static void onField(lv_event_t *e) {
@@ -1315,12 +1334,207 @@ static void buildCompost() {
                        onCompostSave);
 }
 
+// ---- Sell / give out: what (sale / compost / residual) -> kg, price, buyer -> receipt code. It counts at once;
+// the admin reviews it afterwards on the website.
+static const int MAX_STOCK = 8, MAX_NAMES = 6;
+struct StockItem { int matId, areaId; float kg; String label; };
+static StockItem stock[MAX_STOCK];
+static int nStock = 0, nShown = 0, shownIdx[MAX_STOCK], sellKind = 0, sellPick = -1;   // kind: 0 sale, 1 compost, 2 residual
+static float compostHand = 0;
+static String names[MAX_NAMES], buyer, sellKey;
+static int nNames = 0;
+static const char *const KINDS[3] = {"sale", "compost", "disposal"};
+static NumField fOutKg = {nullptr, "", S_KG_F, true}, fPrice = {nullptr, "", S_PRICE, true};
+static lv_obj_t *btnKind[3], *sellList, *lblSellWhat, *btnBuyer, *lblSellTotal, *btnSellSave, *nameBox, *taName;
+static lv_obj_t *lblSoldCode, *lblSoldLine, *lblSoldTotal;
+
+static float sellAvailable() { return sellKind == 1 ? compostHand : sellPick >= 0 ? stock[sellPick].kg : 0; }
+
+static void onSellRow(lv_event_t *e) {
+  sellPick = (int)(intptr_t)lv_event_get_user_data(e);   // -1 = compost on hand
+  goTo(scrSellForm);
+}
+
+static void paintSell() {
+  for (int i = 0; i < 3; i++) {
+    bool on = i == sellKind;
+    lv_obj_set_style_bg_color(btnKind[i], lv_color_hex(on ? T_PRIMARY : T_CARD), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(btnKind[i], 0), lv_color_hex(on ? 0xFFFFFF : T_INK), 0);
+  }
+  lv_obj_clean(sellList);
+  char k[16];
+  if (sellKind == 1) {                           // compost has no area: one row, what finished batches made
+    fmtKg(k, sizeof k, compostHand);
+    char line[64]; snprintf(line, sizeof line, T(S_COMPOST_HAND), k);
+    lv_obj_t *b = button(sellList, line, 0, 0, 736, 52, T_CARD, T_INK, &atk_b24, onSellRow, (void *)(intptr_t)-1, T_LINE);
+    if (compostHand <= 0) lv_obj_add_state(b, LV_STATE_DISABLED);
+    return;
+  }
+  nShown = 0;
+  for (int i = 0; i < nStock && nShown < 4; i++)  // a sale is a material; residual has none
+    if ((sellKind == 0) == (stock[i].matId != 0)) shownIdx[nShown++] = i;
+  if (!nShown) { text(sellList, T(S_NOTHING_OUT), &atk_r18, T_INK2, 0, 8); return; }
+  for (int n = 0; n < nShown; n++)
+    button(sellList, stock[shownIdx[n]].label.c_str(), 0, n * 56, 736, 50, T_CARD, T_INK, &atk_b24, onSellRow,
+           (void *)(intptr_t)shownIdx[n], T_LINE);
+}
+
+static void onKind(lv_event_t *e) { sellKind = (int)(intptr_t)lv_event_get_user_data(e); paintSell(); }
+static void onSellBack(lv_event_t *) { goTo(scrOp); }
+
+static void fillStock(JsonArray a) {
+  nStock = 0;
+  for (JsonObject o : a) {
+    if (nStock == MAX_STOCK) break;
+    char k[16]; fmtKg(k, sizeof k, o["kg"] | 0.0f);
+    String label = String((const char *)(o["material"] | "")) + "  ·  " + (const char *)(o["area"] | "") + "  ·  " + k + " kg";
+    stock[nStock++] = {o["material_id"] | 0, o["area_id"] | 0, o["kg"] | 0.0f, label};
+  }
+}
+
+static void buildSell() {
+  scrSell = screen();
+  text(scrSell, T(S_T_SELL), &atk_b32, T_INK, T_MARGIN, 58);
+  const Str kinds[3] = {S_K_SALE, S_T_COMPOST, S_RESIDUAL_M};
+  for (int i = 0; i < 3; i++)
+    btnKind[i] = button(scrSell, T(kinds[i]), T_MARGIN + i * 248, 106, 240, 56, T_CARD, T_INK, &atk_b24, onKind,
+                        (void *)(intptr_t)i, T_LINE);
+  sellList = box(scrSell, T_MARGIN, 176, 736, 220, T_BG);
+  button(scrSell, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onSellBack, nullptr, T_LINE);
+}
+
+// ---- the form: kg, price (a sale), buyer
+static void paintSellForm() {
+  char k[16], line[96];
+  fmtKg(k, sizeof k, sellAvailable());
+  String what = sellKind == 1 ? String(T(S_T_COMPOST)) : sellPick >= 0 ? stock[sellPick].label : String("");
+  int cut = what.lastIndexOf("  ·  ");           // the row's own kg goes; the line under it says what's available
+  if (sellKind != 1 && cut > 0) what = what.substring(0, cut);
+  snprintf(line, sizeof line, T(S_AVAILABLE), k);
+  lv_label_set_text(lblSellWhat, (what + "\n" + line).c_str());
+  paintField(fOutKg);
+  if (sellKind == 0) { lv_obj_clear_flag(fPrice.btn, LV_OBJ_FLAG_HIDDEN); paintField(fPrice); }
+  else lv_obj_add_flag(fPrice.btn, LV_OBJ_FLAG_HIDDEN);
+  if (buyer.length()) lv_label_set_text_fmt(lv_obj_get_child(btnBuyer, 0), T(S_BUYER_IS), buyer.c_str());
+  else lv_label_set_text(lv_obj_get_child(btnBuyer, 0), T(S_BUYER_PICK));
+  float kg = fOutKg.v.toFloat(), price = fPrice.v.toFloat();
+  if (sellKind == 0 && kg > 0 && price > 0) {
+    char tot[16]; snprintf(tot, sizeof tot, "%.2f", kg * price);
+    lv_label_set_text_fmt(lblSellTotal, T(S_OUT_TOTAL), tot);
+  } else lv_label_set_text(lblSellTotal, "");
+  paintSave(btnSellSave, kg > 0 && kg <= sellAvailable() + 0.001f && buyer.length() && (sellKind != 0 || price > 0));
+}
+
+static void onBuyerChip(lv_event_t *) { goTo(scrBuyer); }
+static void onSellFormBack(lv_event_t *) { goTo(scrSell); }
+
+static void onSellSave(lv_event_t *) {
+  if (busy) return;
+  JsonDocument d; d["type"] = "op"; d["do"] = "outgoing"; d["kind"] = KINDS[sellKind];
+  if (sellKind != 1) { d["area_id"] = stock[sellPick].areaId; if (sellKind == 0) d["material_id"] = stock[sellPick].matId; }
+  d["kg"] = fOutKg.v.toFloat(); d["recipient"] = buyer; d["key"] = sellKey;
+  if (sellKind == 0) d["price"] = fPrice.v.toFloat();
+  wsSend(d); setBusy(true); paintSellForm();
+}
+
+static void buildSellForm() {
+  scrSellForm = screen();
+  lblSellWhat = text(scrSellForm, "", &atk_r18, T_INK, T_MARGIN, 60, 356);
+  fieldButton(scrSellForm, fOutKg, 116);
+  fieldButton(scrSellForm, fPrice, 188);
+  btnBuyer = button(scrSellForm, "", T_MARGIN, 260, 356, 56, T_CARD, T_INK, &atk_r18, onBuyerChip, nullptr, T_LINE);
+  lblSellTotal = text(scrSellForm, "", &atk_b24, T_INK, T_MARGIN, 330);
+  lv_obj_t *kp = keypad(scrSellForm, formKeys, 420, 64, 356, 328, onFormKey);
+  lv_obj_set_style_text_font(kp, &atk_b48, LV_PART_ITEMS);
+  button(scrSellForm, T(S_BACK), T_MARGIN, 404, 172, T_TAP, T_CARD, T_INK, &atk_b24, onSellFormBack, nullptr, T_LINE);
+  btnSellSave = button(scrSellForm, T(S_SAVE), T_MARGIN + 184, 404, 564, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onSellSave);
+}
+
+// ---- who it's for: a recent name, or type a new one
+static void onName(lv_event_t *e) { buyer = names[(int)(intptr_t)lv_event_get_user_data(e)]; goTo(scrSellForm); }
+
+static void onKeyboard(lv_event_t *e) {
+  lv_event_code_t c = lv_event_get_code(e);
+  if (c == LV_EVENT_READY) {
+    String s = lv_textarea_get_text(taName);
+    s.trim();
+    if (s.length()) { buyer = s; goTo(scrSellForm); }
+  } else if (c == LV_EVENT_CANCEL) goTo(scrSellForm);
+}
+
+static void paintBuyer() {
+  lv_obj_clean(nameBox);
+  if (!nNames) { text(nameBox, T(S_NO_NAMES), &atk_r18, T_INK2, 0, 8); return; }
+  for (int i = 0; i < nNames && i < 4; i++)
+    button(nameBox, names[i].c_str(), (i % 2) * 372, (i / 2) * 54, 364, 48, T_CARD, T_INK, &atk_r18, onName,
+           (void *)(intptr_t)i, T_LINE);
+}
+
+static void buildBuyer() {
+  scrBuyer = screen();
+  text(scrBuyer, T(S_WHO_FOR), &atk_b32, T_INK, T_MARGIN, 52);
+  nameBox = box(scrBuyer, T_MARGIN, 98, 736, 108, T_BG);
+  taName = lv_textarea_create(scrBuyer);
+  lv_textarea_set_one_line(taName, true);
+  lv_textarea_set_max_length(taName, 60);
+  lv_obj_set_style_text_font(taName, &atk_r24, 0);
+  lv_obj_set_pos(taName, T_MARGIN, 210);
+  lv_obj_set_size(taName, 736, 50);
+  lv_obj_t *kb = lv_keyboard_create(scrBuyer);
+  lv_obj_set_pos(kb, 0, 266);
+  lv_obj_set_size(kb, 800, 214);
+  lv_obj_set_style_text_font(kb, &atk_r24, LV_PART_ITEMS);
+  lv_keyboard_set_textarea(kb, taName);
+  lv_obj_add_event_cb(kb, onKeyboard, LV_EVENT_ALL, nullptr);
+}
+
+// ---- the receipt the buyer can photograph
+static void onSoldDone(lv_event_t *) { goTo(scrOp); }
+
+static void buildSold() {
+  scrSold = screen();
+  text(scrSold, T(S_RECORDED), &atk_b32, T_PRIMARY, T_MARGIN, 64);
+  lblSoldCode = text(scrSold, "", &atk_b72, T_INK, T_MARGIN, 112);
+  lblSoldLine = text(scrSold, "", &atk_r24, T_INK, T_MARGIN, 210, 736);
+  lblSoldTotal = text(scrSold, "", &atk_b32, T_INK, T_MARGIN, 260);
+  button(scrSold, T(S_DONE), T_MARGIN, 404, 736, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onSoldDone);
+}
+
+static void showSold(JsonObject o) {
+  char k[16]; fmtKg(k, sizeof k, o["kg"] | 0.0f);
+  lv_label_set_text(lblSoldCode, o["code"] | "");
+  lv_label_set_text_fmt(lblSoldLine, "%s kg  ·  %s", k, (const char *)(o["recipient"] | ""));
+  if (o["total"].isNull()) lv_label_set_text(lblSoldTotal, "");
+  else { char tot[16]; snprintf(tot, sizeof tot, "%.2f", o["total"].as<float>()); lv_label_set_text_fmt(lblSoldTotal, T(S_OUT_TOTAL), tot); }
+  goTo(scrSold);
+}
+
+static void enterSell(lv_obj_t *scr, lv_obj_t *cur) {
+  if (scr == scrSell) {
+    if (cur == scrOp) { sellKind = 0; nStock = 0; compostHand = 0; }
+    paintSell();
+    opAsk("stock"); opAsk("compost_on_hand");
+  }
+  if (scr == scrSellForm) {
+    if (cur == scrSell) {                        // a new sale: empty form, a fresh key (a resend reuses it)
+      fOutKg.v = ""; fPrice.v = ""; buyer = ""; activeField = &fOutKg;
+      sellKey = "k" + String(millis()) + "-" + KINDS[sellKind];
+    }
+    paintSellForm();
+  }
+  if (scr == scrBuyer) {
+    lv_textarea_set_text(taName, "");
+    nNames = 0; paintBuyer();
+    JsonDocument d; d["type"] = "op"; d["do"] = "recipients"; d["kind"] = KINDS[sellKind]; wsSend(d);
+  }
+}
+
 void uiOnOp(JsonDocument &d) {
   const char *what = d["do"] | "";
   bool ok = d["ok"] | false;
   lv_obj_t *cur = lv_scr_act();
-  bool compostSave = !strncmp(what, "compost_", 8);
-  bool save = !strcmp(what, "segregate") || !strcmp(what, "sort") || compostSave;
+  bool compostSave = !strncmp(what, "compost_", 8) && strcmp(what, "compost_on_hand");
+  bool save = !strcmp(what, "segregate") || !strcmp(what, "sort") || compostSave || !strcmp(what, "outgoing");
   if (save) setBusy(false);
   if (d["signed_out"] | false) {                 // the session ended (30 minutes, or locked elsewhere)
     signedIn = false;
@@ -1334,6 +1548,16 @@ void uiOnOp(JsonDocument &d) {
     if (cur == scrSeg) paintSeg();
     if (cur == scrSort) paintSort();
     if (cur == scrCompost) paintCompostForm();
+    if (cur == scrSellForm) paintSellForm();
+    return;
+  }
+  if (!strcmp(what, "outgoing")) { showSold(d["data"].as<JsonObject>()); return; }
+  if (!strcmp(what, "stock")) { fillStock(d["data"].as<JsonArray>()); if (cur == scrSell) paintSell(); return; }
+  if (!strcmp(what, "compost_on_hand")) { compostHand = d["data"]["kg"] | 0.0f; if (cur == scrSell) paintSell(); return; }
+  if (!strcmp(what, "recipients")) {
+    nNames = 0;
+    for (JsonVariant v : d["data"].as<JsonArray>()) { if (nNames == MAX_NAMES) break; names[nNames++] = v.as<const char *>(); }
+    if (cur == scrBuyer) paintBuyer();
     return;
   }
   if (compostSave) {                             // saved: show it, then the fresh balance and batches
@@ -1391,6 +1615,7 @@ static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
   if (scr == scrOp) { lv_label_set_text_fmt(lblHi, T(S_HI), opName.c_str()); paintAlert(); opAsk("today"); }
   if (scr == scrSortMat) enterSortMat();
   if (scr == scrSeg || scr == scrSort) enterForm(scr, cur);
+  if (scr == scrSell || scr == scrSellForm || scr == scrBuyer) enterSell(scr, cur);
   if (scr == scrCompost) { if (cur != scrCompost) enterCompost(); else { paintBatches(); paintCompostForm(); opAsk("compost"); } }   // a language switch rebuilt it: reload its words
 }
 
@@ -1448,18 +1673,18 @@ void goTo(lv_obj_t *scr) {
 static void buildAll(int show) {
   lv_obj_t *cur = lv_scr_act();
   lv_obj_t *old[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrSortMat,
-                     scrSeg, scrSort, scrCompost};
+                     scrSeg, scrSort, scrCompost, scrSell, scrSellForm, scrBuyer, scrSold};
   const int N = sizeof old / sizeof old[0];
   int at = 0;
   for (int i = 0; i < N; i++) if (old[i] && old[i] == cur) at = i;
   if (show >= 0) at = show;
-  for (NumField *f : {&fWet, &fDry, &fKg, &fBags, &fCompost}) f->btn = nullptr;
+  for (NumField *f : {&fWet, &fDry, &fKg, &fBags, &fCompost, &fOutKg, &fPrice}) f->btn = nullptr;
   buildHome(); buildPurok(); buildScan(); buildPick(); buildWeigh(); buildReceipt(); buildPin(); buildOperator();
-  buildList(); buildSortMat(); buildSeg(); buildSort(); buildCompost();
+  buildList(); buildSortMat(); buildSeg(); buildSort(); buildCompost(); buildSell(); buildSellForm(); buildBuyer(); buildSold();
   paintAlert();
   paintLang();
   lv_obj_t *now[] = {scrHome, scrPurok, scrScan, scrPick, scrWeigh, scrReceipt, scrPin, scrOp, scrList, scrSortMat,
-                     scrSeg, scrSort, scrCompost};
+                     scrSeg, scrSort, scrCompost, scrSell, scrSellForm, scrBuyer, scrSold};
   lv_obj_t *scr = now[at];
   if (scr == scrWeigh) refreshWeigh();
   if (scr == scrReceipt) paintReceipt();
@@ -1501,6 +1726,7 @@ void uiLoop() {
     if (lv_scr_act() == scrSeg) paintSeg();
     if (lv_scr_act() == scrSort) paintSort();
     if (lv_scr_act() == scrCompost) paintCompostForm();
+    if (lv_scr_act() == scrSellForm) paintSellForm();
   }
   if (pinAskedAt && millis() - pinAskedAt > 8000) {   // the PC never answered the PIN (SapulMRF hashes it slowly)
     pinAskedAt = 0;
@@ -1530,6 +1756,7 @@ bool uiGoto(const char *n) {
   if (!strcmp(n, "seglist")) { choose(L_SEG); return true; }
   if (!strcmp(n, "sortlist")) { choose(L_SORT); return true; }
   if (!strcmp(n, "compost")) { goTo(scrCompost); return true; }
+  if (!strcmp(n, "sell")) { goTo(scrSell); return true; }
   for (int i = 0; i < 8; i++) if (!strcmp(n, names[i])) {
     if (all[i] == scrWeigh && !purok) purok = 3;    // a believable screen for review shots
     goTo(all[i]);
