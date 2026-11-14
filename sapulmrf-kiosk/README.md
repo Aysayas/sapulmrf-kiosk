@@ -54,6 +54,28 @@ python kiosk_bridge.py --model path/to/best.pt --cam 1
     - **Signing out:** Lock, or 5 minutes idle, signs out. 5 wrong PINs lock that operator for 5 minutes. Without SapulMRF there is no operator mode.
 - Windows Firewall: allow Python on **private** networks (it must receive UDP 5001 for auto-find).
 
+### Testing without SapulMRF (fake API)
+Step-by-step for both the real SapulMRF and the fake API: **[docs/running.md](docs/running.md)**.
+
+To check the kiosk works without Docker or the website, run a fake SapulMRF on the PC:
+```
+cd pc_bridge
+py fake_api.py                                                    # window 1
+$env:SAPULMRF_API="http://127.0.0.1:8001"; $env:SAPULMRF_KEY="fake"
+py kiosk_bridge.py --model best.pt --cam 0 --dev                  # window 2
+```
+- **Demo data, in memory:** each start is fresh. It has:
+  - Operator 1 (PIN 1234) and Operator 2 (PIN 5678)
+  - Plastic / Paper / Metal / Glass, in Demo Area A / B and a Residual bin
+  - two drop-offs waiting for segregation and one waiting to be sorted
+  - one open compost batch
+- **Every kiosk task works:** drop-off → `D-` receipt; Staff → Operator 1 → 1234; segregate, sort, compost, sell / give free, fix, recount. Window 1 prints each save, and every refusal with its reason.
+- **Load cell:** with `USE_HX711 1`, a scale drop-off is refused unless the kiosk first sent a steady `{"type":"reading","kg":…,"stable":true}` of the same weight in the last 10 minutes. That's SapulMRF's own rule. Window 1 prints each reading (`scale 2.35 kg steady`), so you can see what the scale sends.
+- **A missing route** shows as `fake API has no …` in window 1. Tell whoever looks after `fake_api.py`.
+- **Not faked:** the website's Live camera (the bridge just keeps retrying it), and camera suggestions on the sort screen.
+- **Port:** it uses 8001, the real API's port, so stop SapulMRF first (`docker compose stop api`), or run `py fake_api.py --port 8011` and use that port in `SAPULMRF_API`.
+- **Self-check:** `py tests\check_fake_api.py` checks the fake still answers in the shapes the bridge reads.
+
 ## 2. Kiosk firmware (Arduino IDE)
 1. Board: **ESP32S3 Dev Module**, PSRAM **OPI PSRAM**, Flash **16MB QIO**, Partition **Huge APP**.
 2. Install the libraries listed at the top of `SapulMRF_Kiosk.ino`. Use **lvgl 8.3.x**, not 9. The WebSockets library is no longer needed.
