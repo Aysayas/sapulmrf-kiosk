@@ -34,7 +34,7 @@ enum Str {
   S_R_PUROK, S_R_KIND, S_R_WEIGHT, S_R_WETDRY, S_R_SORT, S_R_OTHER, S_REDO, S_O_SORT, S_O_SEGSORT, S_O_SEG, S_O_ALL,
   S_UNDO, S_REDO_DROP, S_SYSTEM_KG, S_COUNTED, S_RC_SPILLED, S_RC_MISCOUNT, S_RC_MOVED, S_PICK_AREA_RC,
   S_STEP_BUYER, S_LAST_SALE, S_NEXT, S_NEED_KG, S_NEED_PRICE, S_NEED_BUYER, S_ONLY_KG, S_SAVE_PESO, S_SAVE_KG, S_WALK_IN,
-  S_NO_BUYERS, S_MODE_SELL, S_MODE_FREE, S_SAVE_FREE, S_GIVEN_FREE,
+  S_NO_BUYERS, S_MODE_SELL, S_MODE_FREE, S_SAVE_FREE, S_GIVEN_FREE, S_SCALE_WAIT,
   S_COUNT
 };
 static const char *const WORDS[][2] = {
@@ -197,6 +197,7 @@ static const char *const WORDS[][2] = {
   {"Give free", "Ibigay nang libre"},
   {"Save  ·  %s kg  ·  free", "I-save  ·  %s kg  ·  libre"},
   {"Given free", "Ibinigay nang libre"},
+  {"Wait for the scale...", "Hintayin ang timbangan..."},
 };
 static_assert(sizeof WORDS / sizeof WORDS[0] == S_COUNT, "every word needs English and Tagalog");
 static int lang = DEFAULT_LANG;
@@ -218,6 +219,7 @@ static bool catSet = false;        // false = nobody chose yet: Weigh asks for i
 static int purok = 0;               // 0 = not chosen
 static float weightKg = 0;
 static bool weightFromScale = false;
+static bool scaleSteady = false;   // the scale's weight has settled (and was sent to SapulMRF)
 static String weightEntry = "";
 static String pinEntry = "";
 static uint32_t pinAskedAt = 0;
@@ -639,10 +641,12 @@ static void refreshWeigh() {
   lv_obj_update_layout(lblWeight);
   lv_obj_align_to(lblKg, lblWeight, LV_ALIGN_OUT_RIGHT_BOTTOM, 10, -12);   // follows the number's width
   // Without the PC the drop-off would be lost. With a weight but no kind, the button opens the picker.
-  bool ok = pcUp && purok > 0 && weightKg > 0.05f;
+  bool settling = weightFromScale && !scaleSteady;   // SapulMRF only takes a settled scale weight
+  bool ok = pcUp && purok > 0 && weightKg > 0.05f && !settling;
   if (ok) lv_obj_clear_state(btnConfirm, LV_STATE_DISABLED); else lv_obj_add_state(btnConfirm, LV_STATE_DISABLED);
   lv_obj_set_style_text_color(lv_obj_get_child(btnConfirm, 0), lv_color_hex(ok ? 0xFFFFFF : T_INK2), 0);
-  setButtonText(btnConfirm, !pcUp ? T(S_PC_OFFLINE) : weightKg <= 0.05f ? T(S_ENTER_WEIGHT) : catSet ? T(S_CONFIRM) : T(S_PICK_KIND));
+  setButtonText(btnConfirm, !pcUp ? T(S_PC_OFFLINE) : weightKg <= 0.05f ? T(S_ENTER_WEIGHT) : settling ? T(S_SCALE_WAIT)
+                             : catSet ? T(S_CONFIRM) : T(S_PICK_KIND));
 }
 
 static void onWeightKey(lv_event_t *e) {
@@ -682,9 +686,10 @@ static void buildWeigh() {
 #endif
 }
 
-void uiSetWeightFromScale(float kg) {
+void uiSetWeightFromScale(float kg, bool steady) {
   weightKg = kg;
   weightFromScale = true;
+  scaleSteady = steady;
   if (lv_scr_act() == scrWeigh) refreshWeigh();
 }
 
@@ -1592,6 +1597,7 @@ static void onSellFormBack(lv_event_t *) { goTo(scrSell); }
 
 static void onSellSave(lv_event_t *) {
   if (busy) return;
+  if (!pcUp) { toast(T(S_PC_OFFLINE), false); return; }   // say so at once, not after the busy timeout
   int miss = nextMissing();
   if (miss >= 0) { setStep(miss == 3 ? 0 : miss); paintSellForm(); return; }   // take the operator to what's missing
   JsonDocument d; d["type"] = "op"; d["do"] = "outgoing";
@@ -1960,7 +1966,10 @@ void uiOnOp(JsonDocument &d) {
     if (cur == scrRecount) paintRecount();
     return;
   }
-  if (!strcmp(what, "outgoing")) { showSold(d["data"].as<JsonObject>()); return; }
+  if (!strcmp(what, "outgoing")) {               // a late reply after the operator left: say it saved, stay put
+    if (cur == scrSellForm) showSold(d["data"].as<JsonObject>()); else toast(T(S_SAVED_OK), true);
+    return;
+  }
   if (!strcmp(what, "stock")) { fillStock(d["data"].as<JsonArray>()); if (cur == scrSell) paintSell(); return; }
   if (!strcmp(what, "compost_on_hand")) { compostHand = d["data"]["kg"] | 0.0f; if (cur == scrSell) paintSell(); return; }
   if (!strcmp(what, "buyers")) {
@@ -1972,7 +1981,7 @@ void uiOnOp(JsonDocument &d) {
   if (compostSave) {                             // saved: show it, then the fresh balance and batches
     toast(T(S_SAVED_OK), true);
     finishing = -1; fCompost.v = "";
-    if (cur == scrCompost) opAsk("compost");
+    if (cur == scrCompost) { paintCompostForm(); opAsk("compost"); }   // clear the form now, the numbers follow
     return;
   }
   if (!strcmp(what, "compost")) { if (cur == scrCompost) fillCompost(d["data"].as<JsonObject>()); return; }
@@ -2176,6 +2185,11 @@ bool uiGoto(const char *n) {
   if (!strcmp(n, "sell")) { goTo(scrSell); return true; }
   if (!strcmp(n, "sellform") && nStock) {
     sellKind = 0; sellPick = 0; chosen = stock[0]; newSale(); goTo(scrSellForm); return true;
+  }
+  if (!strcmp(n, "dropoff")) {                     // a test drop-off through the real Confirm: Purok 3, Recyclable, 1.5 kg
+    purok = 3; category = 1; catSet = true; catFromCamera = false;
+    weightEntry = "1.5"; weightKg = 1.5f; weightFromScale = false;
+    onConfirm(nullptr); return true;
   }
   if (!strcmp(n, "fix")) { goTo(scrFixMenu); return true; }
   if (!strcmp(n, "fixlist")) { goTo(scrFix); return true; }

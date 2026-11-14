@@ -64,10 +64,15 @@ More detail and troubleshooting: `C:\dev\sapulmrf\docs\start-up.md`.
 5. Stop with Ctrl+C in both windows. Everything entered is forgotten. Start SapulMRF's API again with `docker compose start api`.
 
 ### Testing the load cell (fake API)
-- Set `USE_HX711 1` and calibrate `HX711_SCALE` in `config.h`, then build and upload.
-- A drop-off weighed by the scale is accepted only if the kiosk sent a **steady** reading of the **same** weight in the last 10 minutes (`{"type":"reading","kg":2.35,"stable":true}`). SapulMRF uses the same rule.
-- Window 1 prints every reading as it arrives (`scale 2.35 kg steady` / `settling`), so you can watch what the scale sends.
-- Today the firmware doesn't send readings yet (see `C:\dev\sapulmrf\docs\kiosk-checklist.md`, item 7), so scale drop-offs are refused until that's added. Manual weights still work.
+- Set `USE_HX711 1` and calibrate `HX711_SCALE` in `config.h` (weigh something known, adjust until the screen agrees), then build and upload.
+- **How the kiosk uses it:**
+  - It reads the scale every 0.3 s.
+  - The weight counts as **steady** once 5 readings in a row sit within ±0.05 kg.
+  - Each new steady weight is sent to the PC as `{"type":"reading","kg":2.35,"stable":true}`, and sent again every 5 minutes.
+  - When the weight moves, it sends `"stable":false`.
+- **Confirm:** the screen shows the steady value. Confirm says "Wait for the scale..." until it settles, and the drop-off uses exactly the value that was sent.
+- **The rule:** SapulMRF, and the fake, accept a scale drop-off only with a steady reading of the same weight from the last 10 minutes.
+- **Watching it:** window 1 prints every reading as it arrives (`scale 2.35 kg steady` / `settling`).
 
 ### What the fake doesn't do
 - No website: nothing appears in SapulMRF, and nothing is kept after it stops.
@@ -83,9 +88,22 @@ More detail and troubleshooting: `C:\dev\sapulmrf\docs\start-up.md`.
   | `/goto?screen=sellform` | Shows a screen (`en` / `tl` switch the language); needs `DEV_TOOLS 1` |
   | `/shot?label=name` | Saves a screenshot to `pc_bridge/kiosk_shots/` |
   | `/op?json={...}` | Runs an operator task as if the kiosk sent it |
+  | `/goto?screen=dropoff` | A test resident drop-off through the real Confirm (Purok 3, Recyclable, 1.5 kg) |
 
   Use the user id and PIN that match the mode: the fake's Operator 1 is id 1, while the real one is whatever SapulMRF gave them.
 - Self-checks (no kiosk needed): `py tests\check_fake_api.py`, and the other `tests\check_*.py`.
+
+## The kiosk key (PC_KEY)
+`PC_KEY` in `SapulMRF_Kiosk/config.h` stops other devices on the Wi-Fi from taking over the kiosk.
+- **The check:** a PC must first send `{"type":"hello","key":"<PC_KEY>"}`, within 3 seconds. Otherwise the kiosk drops it and sends it nothing.
+- **Holding the link:** while the trusted PC is talking (anything in the last 10 s), a new connection is refused instead of replacing it.
+- **Where the bridge gets the key:** from `KIOSK_PC_KEY` if set, else straight from `config.h` in this repo, so on this laptop there's nothing to set.
+- **On another PC:** set `$env:KIOSK_PC_KEY = "<the key>"` before starting the bridge.
+- `""` turns the check off (the committed `config.h` has `""`; the real key stays local, like the Wi-Fi password).
+
+## Before deployment
+- `DEV_TOOLS 0` in `config.h`, so the PC can't switch screens. The dev control's `/goto` and test drop-off stop working.
+- A real `PC_KEY`, and a calibrated scale if one is fitted.
 
 ## When it doesn't work
 | What you see | Fix |
@@ -97,3 +115,5 @@ More detail and troubleshooting: `C:\dev\sapulmrf\docs\start-up.md`.
 | Bridge keeps saying "Can't reach kiosk at 192.168.x.x" | It was started with an old IP. Ctrl+C, start it again **without** the IP |
 | Bridge says "Looking for the kiosk" forever | Different networks, or Windows Firewall blocks Python (allow it on private networks) |
 | The bridge window closes by itself | The laptop ran low on memory. Close heavy apps and start it again |
+| Bridge connects, then the kiosk drops it at once | The PC_KEY doesn't match: check `config.h`, or `KIOSK_PC_KEY` on another PC |
+| The kiosk keeps dropping the link every few seconds | Two bridges are running. `Get-Process py, python`, and stop the older one |

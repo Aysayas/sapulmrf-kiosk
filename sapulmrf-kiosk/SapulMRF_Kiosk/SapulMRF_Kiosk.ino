@@ -68,6 +68,10 @@ WiFiClient pc;
 WiFiUDP beacon;
 JPEGDEC jpeg;
 bool pcUp = false;
+// PC_KEY (config.h): the PC must say {"type":"hello","key":...} first, or it's dropped. "" = no check.
+bool pcTrusted = false;
+uint32_t pcSince = 0, pcLastRx = 0;
+const uint32_t HELLO_MS = 3000, PC_QUIET_MS = 10000;
 bool apMode = false;
 String netName = "", netIp = "";
 
@@ -82,7 +86,7 @@ float batPct = -1, batMv = 0, batMa = 0;
 int detFps = 0;                          // the PC's send rate, shown on the video
 
 void sendPacket(char type, const uint8_t *data, uint32_t len) {
-  if (!pc || !pc.connected()) return;
+  if (!pc || !pc.connected() || !pcTrusted) return;   // nothing goes to a PC that hasn't said hello
   uint8_t h[5] = {(uint8_t)type, (uint8_t)len, (uint8_t)(len >> 8), (uint8_t)(len >> 16), (uint8_t)(len >> 24)};
   pc.write(h, 5);
   if (len) pc.write(data, len);
@@ -192,7 +196,27 @@ void setPcStatus(bool up) {
   uiSetPcUp(up);
 }
 
+void onTrusted() {
+  pcTrusted = true;
+  Serial.printf("PC trusted: %s\n", pc.remoteIP().toString().c_str());
+  setPcStatus(true);
+  setMode(uiWantsVideo() ? "scan" : "idle");
+  JsonDocument d; d["type"] = "stats"; wsSend(d);
+}
+
+bool helloOk() {                          // the first message must be hello with the right key
+  JsonDocument d;
+  if (rxType != 'M' || deserializeJson(d, rxBuf, rxLen)) return false;
+  return !strcmp(d["type"] | "", "hello") && !strcmp(d["key"] | "", PC_KEY);
+}
+
 void handlePacket() {
+  pcLastRx = millis();
+  if (!pcTrusted) {
+    if (helloOk()) onTrusted();
+    else { Serial.println("PC without the right key - dropping it"); pc.stop(); }
+    return;
+  }
   if (rxType == 'J') {
     onFrame(rxBuf, rxLen);
     sendPacket('A', nullptr, 0);          // ACK: shown, PC may send the next frame
@@ -204,20 +228,30 @@ void handlePacket() {
 }
 
 void pcLoop() {
-  if (server.hasClient()) {               // new PC: replace the old one
+  if (server.hasClient()) {               // new PC: replace the old one, unless a trusted PC is still talking
     WiFiClient n = server.available();
-    if (pc && pc.connected()) pc.stop();
-    pc = n;
-    pc.setNoDelay(true);
-    rxHdrGot = 0; rxType = 0;
-    Serial.printf("PC connected from %s\n", pc.remoteIP().toString().c_str());
-    setPcStatus(true);
-    setMode(uiWantsVideo() ? "scan" : "idle");
-    JsonDocument d; d["type"] = "stats"; wsSend(d);
+    if (PC_KEY[0] && pcTrusted && pc.connected() && millis() - pcLastRx < PC_QUIET_MS) {
+      Serial.printf("Refused %s: a trusted PC is connected\n", n.remoteIP().toString().c_str());
+      n.stop();
+    } else {
+      if (pc && pc.connected()) pc.stop();
+      if (pcUp) setPcStatus(false);
+      pc = n;
+      pc.setNoDelay(true);
+      rxHdrGot = 0; rxType = 0;
+      pcTrusted = false; pcSince = pcLastRx = millis();
+      Serial.printf("PC connected from %s\n", pc.remoteIP().toString().c_str());
+      if (!PC_KEY[0]) onTrusted();           // no key set: trust it at once, as before
+    }
   }
-  if (pcUp && !pc.connected()) {
+  if (pc && !pcTrusted && pc.connected() && millis() - pcSince > HELLO_MS) {
+    Serial.println("PC sent no hello - dropping it");
+    pc.stop();
+  }
+  if ((pcUp || pcTrusted) && !pc.connected()) {
     Serial.println("PC disconnected");
     pc.stop();
+    pcTrusted = false;
     setPcStatus(false);
     rxHdrGot = 0; rxType = 0;
   }
@@ -457,6 +491,49 @@ void statsLoop() {
   statFrames = statDecodeMs = 0;
 }
 
+#if USE_HX711
+// The weight counts as steady once SCALE_N readings in a row sit within SCALE_BAND kg. Each new steady weight is sent
+// to SapulMRF as a reading (it accepts a scale drop-off only with a matching steady reading from the last 10 minutes),
+// and that exact value is what the screen shows and the drop-off sends.
+const int SCALE_N = 5;                   // 5 x 300 ms = 1.5 s still
+const float SCALE_BAND = 0.05f;
+const uint32_t SCALE_RESEND_MS = 300000; // send the same steady weight again every 5 min, inside SapulMRF's 10
+
+void sendReading(float kg, bool stable) {
+  JsonDocument d; d["type"] = "reading"; d["kg"] = kg; d["stable"] = stable; wsSend(d);
+}
+
+void scaleLoop() {
+  static float win[SCALE_N];
+  static int n = 0, head = 0;
+  static uint32_t lastRead = 0, sentAt = 0;
+  static float sentKg = -1;
+  static bool wasSteady = false, wasUp = false;
+  if (millis() - lastRead < 300 || !scale.is_ready()) return;
+  lastRead = millis();
+  float kg = roundf(max(0.0f, scale.get_units(3)) * 100) / 100;   // 2 decimals, as SapulMRF stores it
+  win[head] = kg; head = (head + 1) % SCALE_N; if (n < SCALE_N) n++;
+  float lo = kg, hi = kg, sum = 0;
+  for (int i = 0; i < n; i++) { lo = min(lo, win[i]); hi = max(hi, win[i]); sum += win[i]; }
+  bool steady = n == SCALE_N && hi - lo <= SCALE_BAND;
+  if (!steady) {
+    if (wasSteady && pcUp) sendReading(kg, false);   // it moved: SapulMRF must not take the old weight
+    wasSteady = false;
+    uiSetWeightFromScale(kg, false);
+    return;
+  }
+  float settled = roundf(sum / n * 100) / 100;
+  bool changed = fabsf(settled - sentKg) >= 0.01f;
+  if (!changed) settled = sentKg;                    // hold the sent value, so the drop-off matches it exactly
+  if (pcUp && (changed || !wasSteady || !wasUp || millis() - sentAt > SCALE_RESEND_MS)) {   // !wasUp: PC just came back
+    sendReading(settled, true);
+    sentKg = settled; sentAt = millis();
+  }
+  wasSteady = true; wasUp = pcUp;
+  uiSetWeightFromScale(settled, pcUp);              // without the PC nothing was sent, so it can't be confirmed
+}
+#endif
+
 void loop() {
   pcLoop();
   beaconLoop();
@@ -465,11 +542,7 @@ void loop() {
   statsLoop();
 
 #if USE_HX711
-  static uint32_t lastW = 0;
-  if (millis() - lastW > 300 && scale.is_ready()) {
-    lastW = millis();
-    uiSetWeightFromScale(max(0.0f, scale.get_units(3)));
-  }
+  scaleLoop();
 #endif
 
   uiLoop();

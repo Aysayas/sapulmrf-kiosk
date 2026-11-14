@@ -24,7 +24,7 @@ void uiSetLight(const char *color);               // "green" | "amber" | "red", 
 void uiSetPcUp(bool up);
 void uiSetNet(const char *line, const char *ip);
 void uiSetBattery(const char *text, uint32_t color, bool visible);
-void uiSetWeightFromScale(float kg);              // HX711, when fitted
+void uiSetWeightFromScale(float kg, bool steady);  // HX711, when fitted: steady = settled and sent
 bool uiWantsVideo();                              // the scan screen is showing and not frozen on a result
 const char *uiScreenName();                       // for screenshots
 bool uiGoto(const char *name);                    // dev tools: show a screen by name

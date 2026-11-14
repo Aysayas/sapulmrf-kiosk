@@ -113,6 +113,18 @@ COOKIE = "sapulmrf_session"  # an operator's SapulMRF session, from their kiosk 
 PHOTO_W, PHOTO_H = 320, 180  # camera-review photo on the kiosk
 OUTGOING_KINDS = ("sale", "giveaway", "compost", "disposal")
 LIST_MAX = 8                 # rows per list sent to the kiosk: what its screen and JSON buffer hold
+CONFIG_H = Path(__file__).resolve().parent.parent / "SapulMRF_Kiosk" / "config.h"
+
+
+def pc_key():
+    """The kiosk's PC_KEY: KIOSK_PC_KEY, else read from the kiosk's config.h next door. "" = the kiosk doesn't check."""
+    if os.environ.get("KIOSK_PC_KEY") is not None:
+        return os.environ["KIOSK_PC_KEY"]
+    try:
+        m = re.search(r'^#define\s+PC_KEY\s+"([^"]*)"', CONFIG_H.read_text(encoding="utf-8"), re.M)
+    except OSError:
+        return ""
+    return m[1] if m else ""
 
 # Map YOUR model's class names to the three kiosk buckets (lower-case). A class in none of them is ignored, so the
 # room behind the tray (chairs, a TV, people) never decides the category; start-up lists the ignored classes.
@@ -704,6 +716,7 @@ class Bridge:
         self.alive = True
         self.window = threading.BoundedSemaphore(IN_FLIGHT)
         print(f"Connected to kiosk {host}:{port}")
+        self.send_json({"type": "hello", "key": pc_key()})  # first, or a kiosk with a PC_KEY drops this PC
         reader = threading.Thread(target=self.read_loop, daemon=True)
         reader.start()
         if API_URL and requests:
@@ -892,6 +905,8 @@ class Bridge:
                 reply["data"]["sort"] = self.count_waiting("sorting")
             elif do == "waiting" and msg.get("for") == "sorting":
                 self.add_guesses(reply["data"])
+            elif do == "area_stock":
+                self.add_empty_materials(reply["data"]["rows"])
         if do == "sort" and r is not None and msg.get("suggestion_id"):
             reply["note"] = self.answer_suggestion(msg)
         if method == "POST":
@@ -902,6 +917,16 @@ class Bridge:
         # shortcut: counts at most 200 waiting drop-offs; SapulMRF has no count route yet
         r, _ = self.as_operator("GET", f"/operations/intake?waiting={what}&limit=200")
         return len(r.json()) if r is not None else 0
+
+    def add_empty_materials(self, rows):
+        """Materials with no stock in the area yet, at 0 kg, so a recount can count them up."""
+        mats, _ = self.as_operator("GET", "/masterdata/materials?active=true")
+        have = {r["material_id"] for r in rows}
+        for m in mats.json() if mats is not None else []:
+            if len(rows) >= LIST_MAX:
+                break
+            if m["id"] not in have:
+                rows.append({"material_id": m["id"], "material": m["name"], "kg": 0.0})
 
     def add_guesses(self, rows):
         """Each drop-off waiting to be sorted gets the camera's suggestion, if it made one."""

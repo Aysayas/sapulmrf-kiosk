@@ -112,6 +112,17 @@ assert area["area_id"] == 351 and len(area["rows"]) == 2, area
 assert op("recount", tok, material_id=2, area_id=351, kg=20, reason="Counted")[0] == 200
 assert next(x for x in op("area_stock", tok, area_id=351)[1]["rows"] if x["material_id"] == 2)["kg"] == 20.0
 
+b_rows = op("area_stock", tok, area_id=352)[1]["rows"]  # Demo Area B holds only Metal
+
+
+class Stub:  # just what the bridge's own method needs
+    token = tok
+    as_operator = kb.Bridge.as_operator
+
+
+kb.Bridge.add_empty_materials(Stub(), b_rows)  # the rest join at 0 kg, so a recount can count them up
+assert [(r["material"], r["kg"]) for r in b_rows] == [("Metal", 10.0), ("Plastic", 0.0), ("Paper", 0.0),
+                                                      ("Glass", 0.0)], b_rows
 assert call("GET", "/classifications/pending", token=tok).json() == []
 assert call("POST", "/classifications/1/confirm", {}, tok).ok
 photo = call("GET", "/deliveries/3/photo", token=tok)

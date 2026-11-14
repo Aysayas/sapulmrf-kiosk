@@ -20,6 +20,7 @@
 #define FORCE_OWN_HOTSPOT 0
 
 #define STREAM_PORT    5000           // TCP, PC connects here (as in sapul stream)
+#define PC_KEY         ""  // the PC bridge must send this first (it reads it from here); "" = no check. Set a random one locally
 #define BEACON_PORT    5001           // UDP "I'm here" so the PC finds the kiosk by itself
 #define MAX_PACKET     65536          // biggest JPEG/JSON the kiosk accepts
 
