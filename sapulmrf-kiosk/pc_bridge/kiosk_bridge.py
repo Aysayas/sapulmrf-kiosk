@@ -338,9 +338,9 @@ def op_request(do, m):
                                              "reason": str(m["reason"]).strip()},             lambda c: {"code": c["record_code"], "to": c["kind"]}
     if do == "area_stock":  # one area's materials (residual included), to recount one
         area = int(m["area_id"])
-        return "GET", "/operations/inventory", None, lambda v: [
+        return "GET", "/operations/inventory", None, lambda v: {"area_id": area, "rows": [
             {"material_id": s["material_id"], "material": s["material"], "kg": s["kg"]}
-            for s in v["stock"] if s["storage_area_id"] == area][:LIST_MAX]
+            for s in v["stock"] if s["storage_area_id"] == area][:LIST_MAX]}
     if do == "recount":
         return "POST", "/inventory/adjustments", {
             "material_id": int(m["material_id"]) if m.get("material_id") else None, "storage_area_id": int(m["area_id"]),

@@ -737,6 +737,7 @@ static void buildReceipt() {
 }
 
 static String replacing;                         // the D- code an operator undid, recorded again now
+static uint32_t replacingAt = 0;
 
 static void onConfirm(lv_event_t *) {
   if (!catSet) { goTo(scrPick); return; }      // weight typed, kind not chosen yet
@@ -747,7 +748,8 @@ static void onConfirm(lv_event_t *) {
   d["purok"] = purok;
   d["manual"] = !weightFromScale;
   d["recyclables"] = detCounts[0];
-  if (replacing.length()) { d["replaces"] = replacing; replacing = ""; }   // recorded again after a fix
+  if (replacing.length() && millis() - replacingAt < 600000) d["replaces"] = replacing;   // recorded again after a fix
+  replacing = "";
   wsSend(d);
   rcState = RC_SENDING;
   rcCode = "";
@@ -1577,11 +1579,13 @@ static void enterSell(lv_obj_t *scr, lv_obj_t *cur) {
 // usual screens. Recount = the counted kg replaces the ledger at once. The admin reviews both on the website.
 static const char *en(Str s) { return WORDS[s][0]; }   // reasons are stored in English, whatever the kiosk shows
 struct FixRow { int id; String code, label, stage; };
-static FixRow fixRows[6];
+static FixRow fixRows[6], fixPick;
 static int nFix = 0, fixSel = -1, fixReason = -1, fixTo = -1, recArea = -1, recMat = -1, nRec = 0, recReason = -1;
 static bool fixLoading = false;
 struct RecRow { int matId; String material; float kg; };
-static RecRow recRows[MAX_STOCK];
+static RecRow recRows[MAX_STOCK], recPick;
+static int recAreaId = 0;
+static String recAreaName;
 static NumField fCount = {nullptr, "", S_COUNTED, true};
 static lv_obj_t *fixList, *lblFixTitle, *reasonBox, *optBox, *btnFixGo, *recList, *lblRecTitle, *lblRecTitle2, *recReasonBox,
                 *btnRecSave;
@@ -1610,7 +1614,11 @@ static void buildFixMenu() {
 static const char *stageText(const String &s) {
   return s == "sorted" ? T(S_ST_SORTED) : s == "separated" ? T(S_ST_SEPARATED) : T(S_RECORDED);
 }
-static void onFixRow(lv_event_t *e) { fixSel = (int)(intptr_t)lv_event_get_user_data(e); goTo(scrFixHow); }
+static void onFixRow(lv_event_t *e) {
+  fixSel = (int)(intptr_t)lv_event_get_user_data(e);
+  if (fixSel >= 0 && fixSel < nFix) fixPick = fixRows[fixSel];
+  goTo(scrFixHow);
+}
 
 static void paintFix() {
   lv_obj_clean(fixList);
@@ -1637,7 +1645,7 @@ static void buildFix() {
 
 // ---- what was wrong, and how far back to go
 static int fixOptions(int *steps) {              // the undo choices for this record's stage
-  const String &s = fixRows[fixSel].stage;
+  const String &s = fixPick.stage;
   int n = 0;
   if (s == "sorted") steps[n++] = 0;
   if (s == "sorted" || s == "separated") steps[n++] = 1;
@@ -1655,15 +1663,15 @@ static void paintPick(lv_obj_t *b, bool on) {
 }
 
 static void paintFixHow() {
-  if (fixSel < 0 || fixSel >= nFix) return;
-  lv_label_set_text(lblFixTitle, fixRows[fixSel].label.c_str());
+  if (fixSel < 0) return;
+  lv_label_set_text(lblFixTitle, fixPick.label.c_str());
   lv_obj_clean(reasonBox);
   for (int i = 0; i < 6; i++)
     paintPick(button(reasonBox, T(FIX_REASONS[i]), (i % 3) * 248, (i / 3) * 50, 240, 44, T_CARD, T_INK, &atk_r18,
                      onReason, (void *)(intptr_t)i, T_LINE), i == fixReason);
   lv_obj_clean(optBox);
   int steps[3], n = fixOptions(steps);
-  bool sorted = fixRows[fixSel].stage == "sorted";
+  bool sorted = fixPick.stage == "sorted";
   for (int i = 0; i < n; i++) {
     Str label = steps[i] == 0 ? S_O_SORT : steps[i] == 1 ? (sorted ? S_O_SEGSORT : S_O_SEG) : S_O_ALL;
     paintPick(button(optBox, T(label), i * 248, 0, 240, 52, T_CARD, T_INK, &atk_b24, onOption,
@@ -1675,7 +1683,7 @@ static void paintFixHow() {
 
 static void onFixGo(lv_event_t *) {
   if (busy || fixSel < 0 || fixReason < 0 || fixTo < 0) return;
-  JsonDocument d; d["type"] = "op"; d["do"] = "undo"; d["delivery_id"] = fixRows[fixSel].id;
+  JsonDocument d; d["type"] = "op"; d["do"] = "undo"; d["delivery_id"] = fixPick.id;
   d["to"] = STEP_KEYS[fixTo]; d["reason"] = en(FIX_REASONS[fixReason]);
   wsSend(d); setBusy(true); paintFixHow();
 }
@@ -1697,6 +1705,7 @@ static void afterUndo(JsonObject o) {            // the record is undone: go and
   if (!strcmp(to, "sort")) { toast(T(S_SAVED_OK), true); choose(L_SORT); return; }
   if (!strcmp(to, "segregation")) { toast(T(S_SAVED_OK), true); choose(L_SEG); return; }
   replacing = (const char *)(o["code"] | "");
+  replacingAt = millis();
   char m[96]; snprintf(m, sizeof m, T(S_REDO_DROP), replacing.c_str());
   toast(m, true);
   goTo(scrPurok);                                // the drop-off flow; leaving staff screens signs the operator out
@@ -1705,10 +1714,16 @@ static void afterUndo(JsonObject o) {            // the record is undone: go and
 // ---- recount: an area, then a material, then the counted kg and why
 static void paintRecount();
 static void onRecArea(lv_event_t *e) {
-  recArea = (int)(intptr_t)lv_event_get_user_data(e); nRec = 0; paintRecount();
-  JsonDocument d; d["type"] = "op"; d["do"] = "area_stock"; d["area_id"] = areas[recArea].id; wsSend(d);
+  recArea = (int)(intptr_t)lv_event_get_user_data(e); nRec = 0;
+  recAreaId = areas[recArea].id; recAreaName = areas[recArea].label;
+  paintRecount();
+  JsonDocument d; d["type"] = "op"; d["do"] = "area_stock"; d["area_id"] = recAreaId; wsSend(d);
 }
-static void onRecMat(lv_event_t *e) { recMat = (int)(intptr_t)lv_event_get_user_data(e); goTo(scrRecountForm); }
+static void onRecMat(lv_event_t *e) {
+  recMat = (int)(intptr_t)lv_event_get_user_data(e);
+  if (recMat >= 0 && recMat < nRec) recPick = recRows[recMat];
+  goTo(scrRecountForm);
+}
 static void onRecountBack(lv_event_t *) {
   if (recArea >= 0) { recArea = -1; paintRecount(); return; }
   goTo(scrFixMenu);
@@ -1717,14 +1732,15 @@ static void onRecountBack(lv_event_t *) {
 static void paintRecount() {
   lv_obj_clean(recList);
   char k[16];
-  if (recArea < 0 || recArea >= nAreas) {
+  if (recArea < 0) {
     lv_label_set_text(lblRecTitle, T(S_PICK_AREA_RC));
     if (!nAreas) { text(recList, T(S_LOADING), &atk_r18, T_INK2, 0, 8); return; }
-    for (int i = 0; i < nAreas && i < 5; i++)
-      button(recList, areas[i].label.c_str(), 0, i * 56, 736, 50, T_CARD, T_INK, &atk_b24, onRecArea, (void *)(intptr_t)i, T_LINE);
+    for (int i = 0; i < nAreas && i < 10; i++)   // two columns: up to 10 areas
+      button(recList, areas[i].label.c_str(), (i % 2) * 372, (i / 2) * 54, 364, 48, T_CARD, T_INK, &atk_r18, onRecArea,
+             (void *)(intptr_t)i, T_LINE);
     return;
   }
-  lv_label_set_text(lblRecTitle, areas[recArea].label.c_str());
+  lv_label_set_text(lblRecTitle, recAreaName.c_str());
   if (!nRec) { text(recList, T(S_NOTHING_OUT), &atk_r18, T_INK2, 0, 8); return; }
   for (int i = 0; i < nRec && i < 5; i++) {
     fmtKg(k, sizeof k, recRows[i].kg);
@@ -1744,9 +1760,9 @@ static void buildRecount() {
 static void onRecReason(lv_event_t *e) { recReason = (int)(intptr_t)lv_event_get_user_data(e); paintRecountForm(); }
 
 static void paintRecountForm() {
-  if (recMat < 0 || recMat >= nRec || recArea < 0) return;
-  char k[16], line[64]; fmtKg(k, sizeof k, recRows[recMat].kg);
-  lv_label_set_text(lblRecTitle2, (recRows[recMat].material + "  ·  " + areas[recArea].label).c_str());
+  if (recMat < 0 || recArea < 0) return;
+  char k[16], line[64]; fmtKg(k, sizeof k, recPick.kg);
+  lv_label_set_text(lblRecTitle2, (recPick.material + "  ·  " + recAreaName).c_str());
   snprintf(line, sizeof line, T(S_SYSTEM_KG), k);
   lv_label_set_text(lv_obj_get_child(recReasonBox, 0), line);
   paintField(fCount);
@@ -1756,8 +1772,8 @@ static void paintRecountForm() {
 
 static void onRecSave(lv_event_t *) {
   if (busy || recMat < 0 || recArea < 0) return;
-  JsonDocument d; d["type"] = "op"; d["do"] = "recount"; d["area_id"] = areas[recArea].id;
-  if (recRows[recMat].matId) d["material_id"] = recRows[recMat].matId;   // none = residual
+  JsonDocument d; d["type"] = "op"; d["do"] = "recount"; d["area_id"] = recAreaId;
+  if (recPick.matId) d["material_id"] = recPick.matId;   // none = residual
   d["kg"] = fCount.v.toFloat(); d["reason"] = en(REC_REASONS[recReason]);
   wsSend(d); setBusy(true); paintRecountForm();
 }
@@ -1786,7 +1802,7 @@ static void enterFix(lv_obj_t *scr, lv_obj_t *cur) {
     if (cur == scrFixMenu) recArea = -1;
     if (!nAreas) opAsk("areas");
     paintRecount();
-    if (recArea >= 0) { JsonDocument d; d["type"] = "op"; d["do"] = "area_stock"; d["area_id"] = areas[recArea].id; wsSend(d); }
+    if (recArea >= 0) { JsonDocument d; d["type"] = "op"; d["do"] = "area_stock"; d["area_id"] = recAreaId; wsSend(d); }
   }
   if (scr == scrRecountForm) {
     if (cur == scrRecount) { fCount.v = ""; recReason = -1; activeField = &fCount; }
@@ -1833,8 +1849,9 @@ void uiOnOp(JsonDocument &d) {
     return;
   }
   if (!strcmp(what, "area_stock")) {
+    if ((d["data"]["area_id"] | 0) != recAreaId) return;   // a late reply for an area the operator left
     nRec = 0;
-    for (JsonObject o : d["data"].as<JsonArray>()) {
+    for (JsonObject o : d["data"]["rows"].as<JsonArray>()) {
       if (nRec == MAX_STOCK) break;
       recRows[nRec++] = {o["material_id"] | 0, String((const char *)(o["material"] | "")), o["kg"] | 0.0f};
     }
@@ -1913,6 +1930,7 @@ static void enterStaff(lv_obj_t *scr, lv_obj_t *cur) {
 
 void goTo(lv_obj_t *scr) {
   lv_obj_t *cur = lv_scr_act();
+  if (scr == scrHome) replacing = "";             // back at the welcome screen: no drop-off is a redo
   if (freezeTimer) { lv_timer_del(freezeTimer); freezeTimer = nullptr; }
   if (cur == scrScan && scr != scrScan) setMode("idle");
   if (scr == scrScan) {
