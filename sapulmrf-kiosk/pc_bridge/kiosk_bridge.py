@@ -24,7 +24,7 @@ TCP port 5000, packets both ways:  [1 byte type][4 byte little-endian length][pa
                      {"type":"reading","kg":4.2,"stable":true}   (HX711 scale, when fitted)
         operator mode (an MRF operator signed in with their own SapulMRF kiosk PIN):
         kiosk -> PC  {"type":"operators"}  {"type":"pin","user_id":3,"pin":"2468"}  {"type":"lock"}
-                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort"|"compost"|"compost_start"|"compost_log"|"compost_finish",...}  (a sort may carry
+                     {"type":"op","do":"today"|"waiting"|"materials"|"areas"|"segregate"|"sort"|"compost"|"compost_start"|"compost_log"|"compost_finish"|"stock"|"compost_on_hand"|"recipients"|"outgoing",...}  (a sort may carry
                       the camera's suggestion_id + guess_material_id: the bridge then confirms or corrects that suggestion)
                      {"type":"photo","delivery_id":12}
         PC -> kiosk  {"type":"operators","items":[{"id":3,"name":"Juan"}]}  {"type":"auth","ok":true,"name":"Juan"}
@@ -110,6 +110,7 @@ STATE_EVERY = 5              # seconds between kiosk-state polls
 RETRY_EVERY = 15             # seconds between outbox retries
 COOKIE = "sapulmrf_session"  # an operator's SapulMRF session, from their kiosk PIN
 PHOTO_W, PHOTO_H = 320, 180  # camera-review photo on the kiosk
+OUTGOING_KINDS = ("sale", "compost", "disposal")
 LIST_MAX = 8                 # rows per list sent to the kiosk: what its screen and JSON buffer hold
 
 # Map YOUR model's class names to the three kiosk buckets (lower-case). A class in none of them is ignored, so the
@@ -302,6 +303,27 @@ def op_request(do, m):
         if body["type"] not in ("turning", "watering", "inspection"):
             raise ValueError(f"unknown compost activity {body['type']!r}")
         return "POST", f"/compost/batches/{int(m['batch_id'])}/activities", body, None
+    if do == "stock":  # what can go out: each material in each area, biggest first
+        return "GET", "/operations/inventory", None, lambda v: [
+            {"material_id": s["material_id"], "material": s["material"], "area_id": s["storage_area_id"],
+             "area": s["area"], "kg": s["kg"]}
+            for s in sorted(v["stock"], key=lambda s: -s["kg"]) if s["kg"] > 0][:LIST_MAX]
+    if do == "compost_on_hand":
+        return "GET", "/operations/outgoing", None, lambda v: {"kg": v["compost_on_hand_kg"]}
+    if do in ("recipients", "outgoing"):
+        kind = m.get("kind")  # "type" is the message type
+        if kind not in OUTGOING_KINDS:
+            raise ValueError(f"unknown outgoing kind {kind!r}")
+        if do == "recipients":
+            return "GET", f"/outgoing/recipients?type={kind}", None, lambda names: names[:LIST_MAX]
+        return "POST", "/outgoing", {
+            "type": kind,
+            "material_id": int(m["material_id"]) if kind == "sale" else None,
+            "storage_area_id": int(m["area_id"]) if kind != "compost" else None,
+            "kg": float(m["kg"]), "recipient": str(m["recipient"]).strip(),
+            "price_per_kg": float(m["price"]) if kind == "sale" and m.get("price") else None,
+            "client_key": str(m["key"]),  # made once per sale on the kiosk: a resend can't sell twice
+        }, lambda o: {k: o[k] for k in ("code", "kg", "recipient", "total")}
     raise ValueError(f"unknown operator task {do!r}")
 
 
