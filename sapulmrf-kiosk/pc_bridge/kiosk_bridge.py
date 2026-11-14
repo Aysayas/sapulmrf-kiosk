@@ -303,11 +303,13 @@ def op_request(do, m):
         if body["type"] not in ("turning", "watering", "inspection"):
             raise ValueError(f"unknown compost activity {body['type']!r}")
         return "POST", f"/compost/batches/{int(m['batch_id'])}/activities", body, None
-    if do == "stock":  # what can go out: each material in each area, biggest first
+    if do == "stock":  # what can go out for that kind, biggest first: a sale is a material, disposal is residual
+        residual = m.get("kind") == "disposal"
         return "GET", "/operations/inventory", None, lambda v: [
             {"material_id": s["material_id"], "material": s["material"], "area_id": s["storage_area_id"],
              "area": s["area"], "kg": s["kg"]}
-            for s in sorted(v["stock"], key=lambda s: -s["kg"]) if s["kg"] > 0][:LIST_MAX]
+            for s in sorted(v["stock"], key=lambda s: -s["kg"])
+            if s["kg"] > 0 and (s["material_id"] is None) == residual][:LIST_MAX]
     if do == "compost_on_hand":
         return "GET", "/operations/outgoing", None, lambda v: {"kg": v["compost_on_hand_kg"]}
     if do in ("recipients", "outgoing"):

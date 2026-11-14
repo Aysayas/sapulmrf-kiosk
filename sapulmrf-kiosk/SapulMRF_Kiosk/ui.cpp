@@ -1338,7 +1338,7 @@ static void buildCompost() {
 // the admin reviews it afterwards on the website.
 static const int MAX_STOCK = 8, MAX_NAMES = 6;
 struct StockItem { int matId, areaId; float kg; String label; };
-static StockItem stock[MAX_STOCK];
+static StockItem stock[MAX_STOCK], chosen;
 static int nStock = 0, nShown = 0, shownIdx[MAX_STOCK], sellKind = 0, sellPick = -1;   // kind: 0 sale, 1 compost, 2 residual
 static float compostHand = 0;
 static String names[MAX_NAMES], buyer, sellKey;
@@ -1348,10 +1348,11 @@ static NumField fOutKg = {nullptr, "", S_KG_F, true}, fPrice = {nullptr, "", S_P
 static lv_obj_t *btnKind[3], *sellList, *lblSellWhat, *btnBuyer, *lblSellTotal, *btnSellSave, *nameBox, *taName;
 static lv_obj_t *lblSoldCode, *lblSoldLine, *lblSoldTotal;
 
-static float sellAvailable() { return sellKind == 1 ? compostHand : sellPick >= 0 ? stock[sellPick].kg : 0; }
+static float sellAvailable() { return sellKind == 1 ? compostHand : chosen.kg; }
 
 static void onSellRow(lv_event_t *e) {
   sellPick = (int)(intptr_t)lv_event_get_user_data(e);   // -1 = compost on hand
+  chosen = sellPick >= 0 && sellPick < nStock ? stock[sellPick] : StockItem{0, 0, 0, String("")};
   goTo(scrSellForm);
 }
 
@@ -1379,7 +1380,11 @@ static void paintSell() {
            (void *)(intptr_t)shownIdx[n], T_LINE);
 }
 
-static void onKind(lv_event_t *e) { sellKind = (int)(intptr_t)lv_event_get_user_data(e); paintSell(); }
+static void askStock() {
+  if (sellKind == 1) { opAsk("compost_on_hand"); return; }
+  JsonDocument d; d["type"] = "op"; d["do"] = "stock"; d["kind"] = KINDS[sellKind]; wsSend(d);
+}
+static void onKind(lv_event_t *e) { sellKind = (int)(intptr_t)lv_event_get_user_data(e); nStock = 0; paintSell(); askStock(); }
 static void onSellBack(lv_event_t *) { goTo(scrOp); }
 
 static void fillStock(JsonArray a) {
@@ -1407,7 +1412,7 @@ static void buildSell() {
 static void paintSellForm() {
   char k[16], line[96];
   fmtKg(k, sizeof k, sellAvailable());
-  String what = sellKind == 1 ? String(T(S_T_COMPOST)) : sellPick >= 0 ? stock[sellPick].label : String("");
+  String what = sellKind == 1 ? String(T(S_T_COMPOST)) : chosen.label;
   int cut = what.lastIndexOf("  ·  ");           // the row's own kg goes; the line under it says what's available
   if (sellKind != 1 && cut > 0) what = what.substring(0, cut);
   snprintf(line, sizeof line, T(S_AVAILABLE), k);
@@ -1431,7 +1436,7 @@ static void onSellFormBack(lv_event_t *) { goTo(scrSell); }
 static void onSellSave(lv_event_t *) {
   if (busy) return;
   JsonDocument d; d["type"] = "op"; d["do"] = "outgoing"; d["kind"] = KINDS[sellKind];
-  if (sellKind != 1) { d["area_id"] = stock[sellPick].areaId; if (sellKind == 0) d["material_id"] = stock[sellPick].matId; }
+  if (sellKind != 1) { d["area_id"] = chosen.areaId; if (sellKind == 0) d["material_id"] = chosen.matId; }
   d["kg"] = fOutKg.v.toFloat(); d["recipient"] = buyer; d["key"] = sellKey;
   if (sellKind == 0) d["price"] = fPrice.v.toFloat();
   wsSend(d); setBusy(true); paintSellForm();
@@ -1513,12 +1518,12 @@ static void enterSell(lv_obj_t *scr, lv_obj_t *cur) {
   if (scr == scrSell) {
     if (cur == scrOp) { sellKind = 0; nStock = 0; compostHand = 0; }
     paintSell();
-    opAsk("stock"); opAsk("compost_on_hand");
+    askStock();
   }
   if (scr == scrSellForm) {
     if (cur == scrSell) {                        // a new sale: empty form, a fresh key (a resend reuses it)
       fOutKg.v = ""; fPrice.v = ""; buyer = ""; activeField = &fOutKg;
-      sellKey = "k" + String(millis()) + "-" + KINDS[sellKind];
+      sellKey = "k" + String(esp_random(), HEX) + "-" + String(millis(), HEX);
     }
     paintSellForm();
   }
