@@ -183,7 +183,7 @@ static const char *const WORDS[][2] = {
   {"Moved, not recorded", "Nailipat, di naitala"},
   {"Pick a storage area", "Pumili ng imbakan"},
   {"Buyer", "Mamimili"},
-  {"last sale", "huling benta"},
+  {"last", "huli"},
   {"Next  " LV_SYMBOL_RIGHT, "Susunod  " LV_SYMBOL_RIGHT},
   {"Enter the kg  " LV_SYMBOL_RIGHT, "Ilagay ang kg  " LV_SYMBOL_RIGHT},
   {"Enter the price  " LV_SYMBOL_RIGHT, "Ilagay ang presyo  " LV_SYMBOL_RIGHT},
