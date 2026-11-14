@@ -1494,7 +1494,7 @@ static void onSoldDone(lv_event_t *) { goTo(scrOp); }
 static void buildSold() {
   scrSold = screen();
   text(scrSold, T(S_RECORDED), &atk_b32, T_PRIMARY, T_MARGIN, 64);
-  lblSoldCode = text(scrSold, "", &atk_b72, T_INK, T_MARGIN, 112);
+  lblSoldCode = text(scrSold, "", &atk_b48, T_INK, T_MARGIN, 116);   // b72 only has digits, D and K
   lblSoldLine = text(scrSold, "", &atk_r24, T_INK, T_MARGIN, 210, 736);
   lblSoldTotal = text(scrSold, "", &atk_b32, T_INK, T_MARGIN, 260);
   button(scrSold, T(S_DONE), T_MARGIN, 404, 736, T_TAP, T_PRIMARY, 0xFFFFFF, &atk_b32, onSoldDone);
